@@ -1,7 +1,7 @@
 local HttpService = game:GetService("HttpService")
 
 -- KEY SYSTEM CONFIG
-local SERVER_URL = "https://sfsbot-8y7x.onrender.com"
+local SERVER_URL = "https://sfsbot-8y7x.onrender.com/validate"
 local KEY_SAVE = "sfs_key.txt"
 
 local function getHWID()
