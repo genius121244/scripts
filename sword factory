@@ -1261,15 +1261,18 @@ task.spawn(function()
             if not data.selling:find("Selling in") then continue end
             if data.owner~=localplr.Name then continue end
             local allMatch=true
-            for _,slot in ipairs(activeSlots) do
-                local found=false
-                for _,enchant in ipairs(data.enchants) do
-                    if enchant.name==slot.enchant and enchant.level>=slot.minLevel then
-                        found=true break
-                    end
-                end
-                if not found then allMatch=false break end
-            end
+local usedIndices={}
+for _,slot in ipairs(activeSlots) do
+    local found=false
+    for idx,enchant in ipairs(data.enchants) do
+        if not usedIndices[idx] and enchant.name==slot.enchant and enchant.level>=slot.minLevel then
+            found=true
+            usedIndices[idx]=true
+            break
+        end
+    end
+    if not found then allMatch=false break end
+end
             if allMatch then
                 local desc=""
                 for _,slot in ipairs(activeSlots) do
