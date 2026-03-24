@@ -1,0 +1,1530 @@
+wait(2)
+local PathfindingService = game:GetService("PathfindingService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local localplr = Players.LocalPlayer
+local TARGET_NAMES = {"Archer","Martial","Melee"}
+local isAttacking = false
+local farmEnabled = true
+local taskRunning = false
+local taskQueue = {}
+local safeModeActive = false
+local anchorCFrame = nil
+
+local SAVE_FILE = "sfs_v11.txt"
+local MAX_TARGET_DISTANCE = 2000
+
+local function addTask(name,fn)
+    table.insert(taskQueue,{name=name,fn=fn})
+end
+local function runNextTask()
+    if taskRunning or #taskQueue==0 then return end
+    taskRunning=true
+    local t=table.remove(taskQueue,1)
+    task.spawn(function()
+        t.fn()
+        taskRunning=false
+        runNextTask()
+    end)
+end
+
+local RARITIES = {
+    "Basic","Basic+","Basic++","Common-","Common","Common+","Common++",
+    "Uncommon-","Uncommon","Uncommon+","Uncommon++","Rare-","Rare","Rare+","Rare++",
+    "Epic-","Epic","Epic+","Epic++","Legendary-","Legendary","Legendary+","Legendary++",
+    "Mythical-","Mythical","Mythical+","Mythical++","Divine-","Divine","Divine+","Divine++",
+    "Super-","Super","Super+","Super++","Mega-","Mega","Mega+","Mega++",
+    "Ultra-","Ultra","Ultra+","Ultra++","Omega-","Omega","Omega+","Omega++",
+    "Extreme-","Extreme","Extreme+","Extreme++","Ultimate-","Ultimate","Ultimate+","Ultimate++",
+    "Insane-","Insane","Insane+","Insane++","Hyper-","Hyper","Hyper+","Hyper++",
+    "Godly-","Godly","Godly+","Godly++","Unique-","Unique","Unique+","Unique++",
+    "Exotic-","Exotic","Exotic+","Exotic++","Supreme-","Supreme","Supreme+","Supreme++",
+    "Celestial-","Celestial","Celestial+","Celestial++","Eternal-","Eternal","Eternal+","Eternal++",
+    "Cosmic-","Cosmic","Cosmic+","Cosmic++","Heavenly-","Heavenly","Heavenly+","Heavenly++",
+    "Stellar-","Stellar","Stellar+","Stellar++","Galactic-","Galactic","Galactic+","Galactic++",
+    "Infinity-","Infinity","Infinity+","Infinity++","Infinity+3","Infinity+4","Infinity+5",
+    "Infinity+6","Infinity+7","Infinity+8","Infinity+9","Infinity+10","Infinity+11",
+    "Infinity+12","Infinity+13","Infinity+14","Infinity+15","Infinity+16","Infinity+17",
+    "Infinity+18","Infinity+19","Infinity+20"
+}
+local RARITY_RANK={}
+for i,r in ipairs(RARITIES) do RARITY_RANK[r]=i end
+
+local ENCHANTS = {
+    "None","Fortune","Sharpness","Protection","Haste","Swiftness","Critical","Resistance",
+    "Healing","Looting","Attraction","Stealth","Ancient","Desperation","Insight",
+    "Thorns","Knockback"
+}
+local ROMAN = {
+    "I","II","III","IV","V","VI","VII","VIII","IX","X",
+    "XI","XII","XIII","XIV","XV","XVI","XVII","XVIII","XIX","XX",
+    "XXI","XXII","XXIII","XXIV","XXV","XXVI","XXVII","XXVIII","XXIX","XXX"
+}
+local areas = {
+    "Beginner's Trials","Mystical Forest","Stranded Island","Snowy Fields",
+    "Crystal Caverns","Volcanic Isles","Intraplanetarium","Ancient Mineshaft"
+}
+
+local function makePreset(name)
+    return {
+        name=name,
+        enabled=false,
+        slots={
+            {enchant="None",minLevel=1,enabled=false},
+            {enchant="None",minLevel=1,enabled=false},
+            {enchant="None",minLevel=1,enabled=false},
+        }
+    }
+end
+
+local S = {
+    farmEnabled=true,
+    selectedArea="Snowy Fields",
+    selectedMovement="Pathfind",
+    swordHotbarSlot="1",
+    safeModeEnabled=false,
+    safeModeHP=20,
+    safeModeFightHP=80,
+    noclipEnabled=false,
+    walkSpeed=16,
+    attackRange=10,
+    anchorX=0,
+    anchorY=0,
+    anchorZ=4,
+    anchorPitch=0,
+    anchorYaw=0,
+    lootEnabled=false,
+    lootMode="Rarity",
+    lootMinRarity="Basic",
+    lootMinWorth=0,
+    lootRadius=5000,
+    webhookUrl="",
+    enchantPresets={
+        makePreset("Preset 1"),
+        makePreset("Preset 2"),
+        makePreset("Preset 3"),
+    },
+    upgradeEnabled={
+        Conveyor=false,Appraiser=false,Polisher=false,Upgrader=false,
+        Molder=false,Classifier=false,Enchanter=false,Ascender=false
+    }
+}
+
+local stats={kills=0,swordsCollected=0,sessionStart=tick(),moneyStart=0,moneyNow=0}
+
+local function saveSettings()
+    pcall(function() writefile(SAVE_FILE,HttpService:JSONEncode(S)) end)
+end
+pcall(function()
+    if isfile(SAVE_FILE) then
+        local d=HttpService:JSONDecode(readfile(SAVE_FILE))
+        for k,v in pairs(d) do S[k]=v end
+    end
+end)
+farmEnabled=S.farmEnabled
+
+local function parsePrice(t)
+    if not t then return 0 end
+    t=t:gsub(",",""):gsub("%$","")
+    local c=t:match("([%d%.]+%a*)")
+    if not c then return 0 end
+    local n=tonumber(c:match("[%d%.]+"))
+    if not n then return 0 end
+    local s=c:match("%a+")
+    if s then
+        s=s:upper()
+        if s=="K" then n=n*1e3 elseif s=="M" then n=n*1e6 elseif s=="B" then n=n*1e9
+        elseif s=="T" then n=n*1e12 elseif s=="QD" or s=="Q" then n=n*1e15
+        elseif s=="QN" then n=n*1e18 elseif s=="S" then n=n*1e21
+        elseif s=="OC" then n=n*1e27 elseif s=="N" then n=n*1e30 end
+    end
+    return n
+end
+
+local function getCash()
+    local ok,r=pcall(function() return localplr.PlayerGui.Main.Top.Cash.Amount.Text end)
+    return ok and parsePrice(r) or 0
+end
+
+local function fireBtn(btn)
+    local c=getconnections(btn.MouseButton1Click)
+    for _,v in pairs(c) do pcall(v.Function) end
+end
+
+local function romanToNum(r)
+    local v={I=1,V=5,X=10,L=50,C=100,D=500,M=1000}
+    local res,prev=0,0
+    for i=#r,1,-1 do
+        local cur=v[r:sub(i,i)] or 0
+        if cur<prev then res=res-cur else res=res+cur end
+        prev=cur
+    end
+    return res
+end
+
+local function getSwordInfo(sword)
+    local main=sword:FindFirstChild("Main")
+    if not main then return nil end
+    local gui=main:FindFirstChildOfClass("SurfaceGui")
+    if not gui then return nil end
+    local d={}
+    local rarity=gui:FindFirstChild("RarityQuality",true)
+    local worth=gui:FindFirstChild("Worth",true)
+    local username=gui:FindFirstChild("Username",true)
+    local selling=gui:FindFirstChild("Selling",true)
+    local enchFrame=gui:FindFirstChild("Enchants",true)
+    d.rarity=nil
+    if rarity then
+        local clean=rarity.Text:gsub("<[^>]+>","")
+        for _,r in ipairs(RARITIES) do
+            if clean:find(r,1,true) then d.rarity=r break end
+        end
+    end
+    d.worth=worth and parsePrice(worth.Text) or 0
+    d.owner=username and username.Text or ""
+    d.selling=selling and selling.Text or ""
+    d.enchants={}
+    if enchFrame then
+        for _,lbl in ipairs(enchFrame:GetChildren()) do
+            if lbl:IsA("TextLabel") and lbl.Text~="" then
+                local name,level=lbl.Text:match("^(.-)%s+([IVXLCDM]+)$")
+                if name and level then
+                    table.insert(d.enchants,{name=name,level=romanToNum(level),levelRoman=level})
+                end
+            end
+        end
+    end
+    return d
+end
+
+local function getHP()
+    local char=localplr.Character
+    if not char then return 100,100 end
+    local hp=char:FindFirstChild("HP")
+    if hp then
+        local h=hp:FindFirstChild("Health")
+        local m=hp:FindFirstChild("MaxHealth")
+        if h and m then return h.Value,m.Value end
+    end
+    local hum=char:FindFirstChildOfClass("Humanoid")
+    if hum then return hum.Health,hum.MaxHealth end
+    return 100,100
+end
+
+local function sendWebhook(title,desc,color)
+    if S.webhookUrl=="" then return end
+    pcall(function()
+        request({
+            Url=S.webhookUrl,Method="POST",
+            Headers={["Content-Type"]="application/json"},
+            Body=HttpService:JSONEncode({embeds={{title=title,description=desc,color=color or 0x7289DA}}})
+        })
+    end)
+end
+
+local function travelToArea(areaName)
+    pcall(function()
+        local btn=localplr.PlayerGui.PlotUI.TeleportUI.Areas.List[areaName].Main
+        local c=getconnections(btn.MouseButton1Click)
+        for _,v in pairs(c) do pcall(v.Function) end
+    end)
+end
+
+local function getEquippedTool()
+    local char=localplr.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+local function buildAnchorCFrame(tp)
+    local pitchRad=math.rad(S.anchorPitch)
+    local yawRad=math.rad(S.anchorYaw)
+    local offset=Vector3.new(S.anchorX,S.anchorY,S.anchorZ)
+    local rotatedOffset=Vector3.new(
+        offset.X*math.cos(yawRad)-offset.Z*math.sin(yawRad),
+        offset.Y,
+        offset.X*math.sin(yawRad)+offset.Z*math.cos(yawRad)
+    )
+    local pos=tp+rotatedOffset
+    local look=CFrame.new(pos,tp)
+    return look*CFrame.Angles(pitchRad,0,0)
+end
+
+local function pickupSword(sword)
+    pcall(function()
+        local timeout=0
+        while timeout<10 do
+            if not sword.Parent then return end
+            local main=sword:FindFirstChild("Main")
+            if not main then return end
+            local gui=main:FindFirstChildOfClass("SurfaceGui")
+            if not gui then return end
+            local selling=gui:FindFirstChild("Selling",true)
+            if selling and selling.Text:find("Unlock in") then
+                task.wait(0.5) timeout=timeout+0.5
+            else break end
+        end
+        if not sword.Parent then return end
+        local char=localplr.Character
+        if not char then return end
+        local rp=char:FindFirstChild("HumanoidRootPart")
+        if not rp then return end
+        local wasAttacking=isAttacking
+        isAttacking=false
+        local savedCF=rp.CFrame
+        rp.Anchored=false
+        local swordPos=sword:GetPivot().Position
+        rp.CFrame=CFrame.new(swordPos+Vector3.new(0,2,0))
+        task.wait(0.3)
+        local picked=not sword.Parent
+        if not picked then
+            rp.CFrame=CFrame.new(swordPos+Vector3.new(0,1,0))
+            task.wait(0.3)
+            picked=not sword.Parent
+        end
+        if picked then stats.swordsCollected=stats.swordsCollected+1 end
+        rp.CFrame=savedCF
+        isAttacking=wasAttacking
+    end)
+end
+
+local function passesFilter(data,mode,minRarity,minWorth)
+    if mode=="Rarity" then
+        return (RARITY_RANK[data.rarity] or 0)>=(RARITY_RANK[minRarity] or 0)
+    else
+        return data.worth>=minWorth
+    end
+end
+
+local function presetMatches(data,preset)
+    local activeSlots={}
+    for _,slot in ipairs(preset.slots) do
+        if slot.enabled and slot.enchant~="None" then
+            table.insert(activeSlots,slot)
+        end
+    end
+    if #activeSlots==0 then return false end
+    local available={}
+    for i,e in ipairs(data.enchants) do
+        available[i]={name=e.name,level=e.level,used=false}
+    end
+    for _,slot in ipairs(activeSlots) do
+        local found=false
+        for _,avail in ipairs(available) do
+            if not avail.used and avail.name==slot.enchant and avail.level>=slot.minLevel then
+                avail.used=true
+                found=true
+                break
+            end
+        end
+        if not found then return false end
+    end
+    return true
+end
+
+-- GUI
+local screenGui=Instance.new("ScreenGui")
+screenGui.Name="SFSv11"
+screenGui.ResetOnSpawn=false
+screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+screenGui.Parent=localplr.PlayerGui
+
+local minimized=false
+local FULL=UDim2.new(0,500,0,520)
+local MINI=UDim2.new(0,500,0,42)
+
+local main=Instance.new("Frame",screenGui)
+main.Size=FULL
+main.Position=UDim2.new(0.5,-250,0.5,-260)
+main.BackgroundColor3=Color3.fromRGB(12,12,18)
+main.BorderSizePixel=0
+main.Active=true
+main.Draggable=true
+main.ClipsDescendants=true
+main.ZIndex=1
+Instance.new("UICorner",main).CornerRadius=UDim.new(0,14)
+local ms=Instance.new("UIStroke",main)
+ms.Color=Color3.fromRGB(45,45,75)
+ms.Thickness=1.5
+
+local titleBar=Instance.new("Frame",main)
+titleBar.Size=UDim2.new(1,0,0,42)
+titleBar.BackgroundColor3=Color3.fromRGB(18,18,30)
+titleBar.BorderSizePixel=0
+Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,14)
+local tg=Instance.new("UIGradient",titleBar)
+tg.Color=ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(35,35,90)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(18,18,30))
+})
+tg.Rotation=90
+
+local titleLbl=Instance.new("TextLabel",titleBar)
+titleLbl.Size=UDim2.new(1,-100,1,0)
+titleLbl.Position=UDim2.new(0,14,0,0)
+titleLbl.BackgroundTransparency=1
+titleLbl.Text="⚔ Sword Factory Script"
+titleLbl.TextColor3=Color3.fromRGB(255,255,255)
+titleLbl.TextSize=15
+titleLbl.Font=Enum.Font.GothamBold
+titleLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+local minBtn=Instance.new("TextButton",titleBar)
+minBtn.Size=UDim2.new(0,30,0,30)
+minBtn.Position=UDim2.new(1,-38,0.5,-15)
+minBtn.BackgroundColor3=Color3.fromRGB(45,45,75)
+minBtn.BorderSizePixel=0
+minBtn.Text="—"
+minBtn.TextColor3=Color3.fromRGB(255,255,255)
+minBtn.TextSize=14
+minBtn.Font=Enum.Font.GothamBold
+Instance.new("UICorner",minBtn).CornerRadius=UDim.new(0,8)
+minBtn.MouseButton1Click:Connect(function()
+    minimized=not minimized
+    main.Size=minimized and MINI or FULL
+    minBtn.Text=minimized and "+" or "—"
+end)
+
+local statusFrame=Instance.new("Frame",main)
+statusFrame.Size=UDim2.new(1,-20,0,26)
+statusFrame.Position=UDim2.new(0,10,0,46)
+statusFrame.BackgroundColor3=Color3.fromRGB(18,18,30)
+statusFrame.BorderSizePixel=0
+Instance.new("UICorner",statusFrame).CornerRadius=UDim.new(0,7)
+local statusLbl=Instance.new("TextLabel",statusFrame)
+statusLbl.Size=UDim2.new(1,-10,1,0)
+statusLbl.Position=UDim2.new(0,8,0,0)
+statusLbl.BackgroundTransparency=1
+statusLbl.Text="◈ Idle"
+statusLbl.TextColor3=Color3.fromRGB(120,120,180)
+statusLbl.TextSize=11
+statusLbl.Font=Enum.Font.Gotham
+statusLbl.TextXAlignment=Enum.TextXAlignment.Left
+local function setStatus(t) statusLbl.Text="◈ "..t end
+
+local tabBarFrame=Instance.new("Frame",main)
+tabBarFrame.Size=UDim2.new(1,-20,0,32)
+tabBarFrame.Position=UDim2.new(0,10,0,76)
+tabBarFrame.BackgroundColor3=Color3.fromRGB(18,18,30)
+tabBarFrame.BorderSizePixel=0
+Instance.new("UICorner",tabBarFrame).CornerRadius=UDim.new(0,9)
+local tbl=Instance.new("UIListLayout",tabBarFrame)
+tbl.FillDirection=Enum.FillDirection.Horizontal
+tbl.Padding=UDim.new(0,2)
+tbl.VerticalAlignment=Enum.VerticalAlignment.Center
+local tbp=Instance.new("UIPadding",tabBarFrame)
+tbp.PaddingLeft=UDim.new(0,3) tbp.PaddingRight=UDim.new(0,3)
+
+local TABS={"Farm","Upgrade","Loot","Enchant","Combat","Config"}
+local tabBtns={}
+local tabPages={}
+
+local function switchTab(name)
+    for n,p in pairs(tabPages) do
+        p.Visible=n==name
+        tabBtns[n].BackgroundColor3=n==name and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,42)
+        tabBtns[n].TextColor3=n==name and Color3.fromRGB(255,255,255) or Color3.fromRGB(150,150,180)
+    end
+end
+
+for _,tabName in ipairs(TABS) do
+    local btn=Instance.new("TextButton",tabBarFrame)
+    btn.Size=UDim2.new(1/#TABS,-3,0,26)
+    btn.BackgroundColor3=tabName=="Farm" and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,42)
+    btn.BorderSizePixel=0
+    btn.Text=tabName
+    btn.TextColor3=tabName=="Farm" and Color3.fromRGB(255,255,255) or Color3.fromRGB(150,150,180)
+    btn.TextSize=10
+    btn.Font=Enum.Font.GothamBold
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,6)
+    tabBtns[tabName]=btn
+
+    local page=Instance.new("ScrollingFrame",main)
+    page.Size=UDim2.new(1,-20,1,-116)
+    page.Position=UDim2.new(0,10,0,112)
+    page.BackgroundTransparency=1
+    page.BorderSizePixel=0
+    page.ScrollBarThickness=3
+    page.ScrollBarImageColor3=Color3.fromRGB(60,60,120)
+    page.CanvasSize=UDim2.new(0,0,0,0)
+    page.Visible=tabName=="Farm"
+    tabPages[tabName]=page
+
+    local layout=Instance.new("UIListLayout",page)
+    layout.Padding=UDim.new(0,5)
+    local pad=Instance.new("UIPadding",page)
+    pad.PaddingTop=UDim.new(0,4) pad.PaddingLeft=UDim.new(0,2) pad.PaddingRight=UDim.new(0,2)
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        page.CanvasSize=UDim2.new(0,0,0,layout.AbsoluteContentSize.Y+10)
+    end)
+    btn.MouseButton1Click:Connect(function() switchTab(tabName) end)
+end
+
+local function sec(parent,title)
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,22)
+    f.BackgroundTransparency=1
+    local line=Instance.new("Frame",f)
+    line.Size=UDim2.new(1,0,0,1)
+    line.Position=UDim2.new(0,0,0.5,0)
+    line.BackgroundColor3=Color3.fromRGB(40,40,70)
+    line.BorderSizePixel=0
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(0,0,1,0)
+    lbl.AutomaticSize=Enum.AutomaticSize.X
+    lbl.AnchorPoint=Vector2.new(0.5,0)
+    lbl.Position=UDim2.new(0.5,0,0,0)
+    lbl.BackgroundColor3=Color3.fromRGB(12,12,18)
+    lbl.BorderSizePixel=0
+    lbl.Text="  "..title.."  "
+    lbl.TextColor3=Color3.fromRGB(90,90,160)
+    lbl.TextSize=11
+    lbl.Font=Enum.Font.GothamBold
+end
+
+local function tog(parent,label,default,onChange)
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,34)
+    f.BackgroundColor3=Color3.fromRGB(20,20,32)
+    f.BorderSizePixel=0
+    Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(1,-56,1,0)
+    lbl.Position=UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label
+    lbl.TextColor3=Color3.fromRGB(205,205,225)
+    lbl.TextSize=12
+    lbl.Font=Enum.Font.Gotham
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local state=default==true
+    local btn=Instance.new("TextButton",f)
+    btn.Size=UDim2.new(0,44,0,22)
+    btn.Position=UDim2.new(1,-52,0.5,-11)
+    btn.BackgroundColor3=state and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+    btn.BorderSizePixel=0
+    btn.Text=state and "ON" or "OFF"
+    btn.TextColor3=Color3.fromRGB(255,255,255)
+    btn.TextSize=11
+    btn.Font=Enum.Font.GothamBold
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,11)
+    btn.MouseButton1Click:Connect(function()
+        state=not state
+        btn.BackgroundColor3=state and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+        btn.Text=state and "ON" or "OFF"
+        if onChange then onChange(state) end
+    end)
+    return f,function() return state end,function(v)
+        state=v==true
+        btn.BackgroundColor3=state and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+        btn.Text=state and "ON" or "OFF"
+    end
+end
+
+local function inp(parent,label,default,onChange)
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,34)
+    f.BackgroundColor3=Color3.fromRGB(20,20,32)
+    f.BorderSizePixel=0
+    Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(0.45,0,1,0)
+    lbl.Position=UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label
+    lbl.TextColor3=Color3.fromRGB(205,205,225)
+    lbl.TextSize=12
+    lbl.Font=Enum.Font.Gotham
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local box=Instance.new("TextBox",f)
+    box.Size=UDim2.new(0.52,-8,0,24)
+    box.Position=UDim2.new(0.46,0,0.5,-12)
+    box.BackgroundColor3=Color3.fromRGB(28,28,45)
+    box.BorderSizePixel=0
+    box.Text=tostring(default or "")
+    box.TextColor3=Color3.fromRGB(255,255,255)
+    box.TextSize=12
+    box.Font=Enum.Font.Gotham
+    box.ClearTextOnFocus=false
+    Instance.new("UICorner",box).CornerRadius=UDim.new(0,6)
+    if onChange then box.FocusLost:Connect(function() onChange(box.Text) end) end
+    return f,box
+end
+
+local function sldr(parent,label,mn,mx,default,onChange)
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,50)
+    f.BackgroundColor3=Color3.fromRGB(20,20,32)
+    f.BorderSizePixel=0
+    Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(1,-10,0,20)
+    lbl.Position=UDim2.new(0,10,0,3)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label..": "..tostring(default)
+    lbl.TextColor3=Color3.fromRGB(205,205,225)
+    lbl.TextSize=12
+    lbl.Font=Enum.Font.Gotham
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local track=Instance.new("Frame",f)
+    track.Size=UDim2.new(1,-20,0,6)
+    track.Position=UDim2.new(0,10,0,32)
+    track.BackgroundColor3=Color3.fromRGB(38,38,62)
+    track.BorderSizePixel=0
+    Instance.new("UICorner",track).CornerRadius=UDim.new(0,3)
+    local fill=Instance.new("Frame",track)
+    fill.Size=UDim2.new(math.clamp((default-mn)/(mx-mn),0,1),0,1,0)
+    fill.BackgroundColor3=Color3.fromRGB(65,65,175)
+    fill.BorderSizePixel=0
+    Instance.new("UICorner",fill).CornerRadius=UDim.new(0,3)
+    local knob=Instance.new("TextButton",track)
+    knob.Size=UDim2.new(0,16,0,16)
+    knob.AnchorPoint=Vector2.new(0.5,0.5)
+    knob.Position=UDim2.new(math.clamp((default-mn)/(mx-mn),0,1),0,0.5,0)
+    knob.BackgroundColor3=Color3.fromRGB(110,110,210)
+    knob.BorderSizePixel=0
+    knob.Text=""
+    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+    local dragging=false
+    knob.MouseButton1Down:Connect(function() dragging=true end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType==Enum.UserInputType.MouseMovement then
+            local ratio=math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+            local val=math.floor(mn+(mx-mn)*ratio)
+            fill.Size=UDim2.new(ratio,0,1,0)
+            knob.Position=UDim2.new(ratio,0,0.5,0)
+            lbl.Text=label..": "..tostring(val)
+            if onChange then onChange(val) end
+        end
+    end)
+end
+
+local function dualBtn(parent,t1,t2,def1,on1,on2)
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,34)
+    f.BackgroundTransparency=1
+    local b1=Instance.new("TextButton",f)
+    b1.Size=UDim2.new(0.5,-3,1,0)
+    b1.BackgroundColor3=def1 and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,45)
+    b1.BorderSizePixel=0 b1.Text=t1
+    b1.TextColor3=Color3.fromRGB(255,255,255)
+    b1.TextSize=12 b1.Font=Enum.Font.GothamBold
+    Instance.new("UICorner",b1).CornerRadius=UDim.new(0,8)
+    local b2=Instance.new("TextButton",f)
+    b2.Size=UDim2.new(0.5,-3,1,0)
+    b2.Position=UDim2.new(0.5,3,0,0)
+    b2.BackgroundColor3=not def1 and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,45)
+    b2.BorderSizePixel=0 b2.Text=t2
+    b2.TextColor3=Color3.fromRGB(255,255,255)
+    b2.TextSize=12 b2.Font=Enum.Font.GothamBold
+    Instance.new("UICorner",b2).CornerRadius=UDim.new(0,8)
+    b1.MouseButton1Click:Connect(function()
+        b1.BackgroundColor3=Color3.fromRGB(65,65,155)
+        b2.BackgroundColor3=Color3.fromRGB(28,28,45)
+        if on1 then on1() end
+    end)
+    b2.MouseButton1Click:Connect(function()
+        b2.BackgroundColor3=Color3.fromRGB(65,65,155)
+        b1.BackgroundColor3=Color3.fromRGB(28,28,45)
+        if on2 then on2() end
+    end)
+end
+
+local function dropdown(parent,label,opts,default,onChange)
+    local selected=default or opts[1]
+    local f=Instance.new("Frame",parent)
+    f.Size=UDim2.new(1,0,0,34)
+    f.BackgroundColor3=Color3.fromRGB(20,20,32)
+    f.BorderSizePixel=0
+    Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(0.42,0,1,0)
+    lbl.Position=UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label
+    lbl.TextColor3=Color3.fromRGB(205,205,225)
+    lbl.TextSize=11
+    lbl.Font=Enum.Font.Gotham
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local dbtn=Instance.new("TextButton",f)
+    dbtn.Size=UDim2.new(0.55,-8,0,24)
+    dbtn.Position=UDim2.new(0.43,0,0.5,-12)
+    dbtn.BackgroundColor3=Color3.fromRGB(32,32,52)
+    dbtn.BorderSizePixel=0
+    dbtn.Text=selected.." ▾"
+    dbtn.TextColor3=Color3.fromRGB(255,255,255)
+    dbtn.TextSize=11
+    dbtn.Font=Enum.Font.Gotham
+    Instance.new("UICorner",dbtn).CornerRadius=UDim.new(0,6)
+    local isOpen=false
+    local activeList=nil
+    local function closeDD()
+        if activeList then activeList:Destroy() activeList=nil end
+        isOpen=false
+    end
+    local function openDD()
+        closeDD() isOpen=true
+        local listH=math.min(#opts*26+4,200)
+        local screenW=workspace.CurrentCamera.ViewportSize.X
+        local screenH=workspace.CurrentCamera.ViewportSize.Y
+        local absPos=dbtn.AbsolutePosition
+        local absSize=dbtn.AbsoluteSize
+        local yPos=absPos.Y+absSize.Y+2
+        if yPos+listH>screenH-10 then yPos=absPos.Y-listH-2 end
+        yPos=math.max(yPos,5)
+        local xPos=absPos.X
+        if xPos+absSize.X>screenW-5 then xPos=screenW-absSize.X-5 end
+        xPos=math.max(xPos,5)
+        local dlist=Instance.new("Frame",screenGui)
+        dlist.Size=UDim2.new(0,absSize.X,0,listH)
+        dlist.Position=UDim2.new(0,xPos,0,yPos)
+        dlist.BackgroundColor3=Color3.fromRGB(22,22,38)
+        dlist.BorderSizePixel=0 dlist.ZIndex=200
+        Instance.new("UICorner",dlist).CornerRadius=UDim.new(0,6)
+        local dscroll=Instance.new("ScrollingFrame",dlist)
+        dscroll.Size=UDim2.new(1,0,1,0)
+        dscroll.BackgroundTransparency=1 dscroll.BorderSizePixel=0
+        dscroll.ScrollBarThickness=3
+        dscroll.CanvasSize=UDim2.new(0,0,0,#opts*28) dscroll.ZIndex=200
+        local dl=Instance.new("UIListLayout",dscroll) dl.Padding=UDim.new(0,2)
+        local dp=Instance.new("UIPadding",dscroll)
+        dp.PaddingTop=UDim.new(0,2) dp.PaddingLeft=UDim.new(0,2) dp.PaddingRight=UDim.new(0,2)
+        for _,opt in ipairs(opts) do
+            local ob=Instance.new("TextButton",dscroll)
+            ob.Size=UDim2.new(1,-4,0,24)
+            ob.BackgroundColor3=opt==selected and Color3.fromRGB(55,55,115) or Color3.fromRGB(32,32,52)
+            ob.BorderSizePixel=0 ob.Text=opt
+            ob.TextColor3=Color3.fromRGB(215,215,235)
+            ob.TextSize=11 ob.Font=Enum.Font.Gotham ob.ZIndex=201
+            Instance.new("UICorner",ob).CornerRadius=UDim.new(0,4)
+            ob.MouseButton1Click:Connect(function()
+                selected=opt dbtn.Text=opt.." ▾"
+                closeDD()
+                if onChange then onChange(opt) end
+                for _,b in ipairs(dscroll:GetChildren()) do
+                    if b:IsA("TextButton") then
+                        b.BackgroundColor3=b.Text==opt and Color3.fromRGB(55,55,115) or Color3.fromRGB(32,32,52)
+                    end
+                end
+            end)
+        end
+        activeList=dlist
+    end
+    dbtn.MouseButton1Click:Connect(function()
+        if isOpen then closeDD() else openDD() end
+    end)
+    UserInputService.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 and isOpen then
+            local mp=UserInputService:GetMouseLocation()
+            if activeList then
+                local ap=activeList.AbsolutePosition
+                local as=activeList.AbsoluteSize
+                if mp.X<ap.X or mp.X>ap.X+as.X or mp.Y<ap.Y or mp.Y>ap.Y+as.Y then closeDD() end
+            end
+        end
+    end)
+    return f,function() return selected end,function(v) selected=v dbtn.Text=v.." ▾" end
+end
+
+-- FARM TAB
+local fp=tabPages["Farm"]
+sec(fp,"Farm")
+tog(fp,"Farm Enabled",S.farmEnabled,function(v)
+    farmEnabled=v S.farmEnabled=v
+    if not v then
+        isAttacking=false anchorCFrame=nil
+        local c=localplr.Character
+        if c then local r=c:FindFirstChild("HumanoidRootPart") if r then r.Anchored=false end end
+    end
+    saveSettings()
+end)
+sec(fp,"Movement")
+dualBtn(fp,"Pathfind","Teleport",S.selectedMovement=="Pathfind",
+    function() S.selectedMovement="Pathfind" saveSettings() end,
+    function() S.selectedMovement="Teleport" saveSettings() end)
+sec(fp,"Sword Slot")
+inp(fp,"Hotbar Slot (1-9)",S.swordHotbarSlot,function(v)
+    local n=v:match("%d+") if n then S.swordHotbarSlot=n saveSettings() end
+end)
+sec(fp,"Area")
+local areaSelLbl=Instance.new("TextLabel",fp)
+areaSelLbl.Size=UDim2.new(1,0,0,16)
+areaSelLbl.BackgroundTransparency=1
+areaSelLbl.Text="Selected: "..S.selectedArea
+areaSelLbl.TextColor3=Color3.fromRGB(120,120,180)
+areaSelLbl.TextSize=11
+areaSelLbl.Font=Enum.Font.Gotham
+areaSelLbl.TextXAlignment=Enum.TextXAlignment.Left
+local areaScroll=Instance.new("ScrollingFrame",fp)
+areaScroll.Size=UDim2.new(1,0,0,150)
+areaScroll.BackgroundColor3=Color3.fromRGB(18,18,30)
+areaScroll.BorderSizePixel=0
+areaScroll.ScrollBarThickness=3
+areaScroll.CanvasSize=UDim2.new(0,0,0,#areas*32)
+Instance.new("UICorner",areaScroll).CornerRadius=UDim.new(0,8)
+local al=Instance.new("UIListLayout",areaScroll) al.Padding=UDim.new(0,3)
+local ap2=Instance.new("UIPadding",areaScroll)
+ap2.PaddingTop=UDim.new(0,3) ap2.PaddingLeft=UDim.new(0,3) ap2.PaddingRight=UDim.new(0,3)
+local areaBtns={}
+for _,area in ipairs(areas) do
+    local ab=Instance.new("TextButton",areaScroll)
+    ab.Size=UDim2.new(1,-6,0,26)
+    ab.BackgroundColor3=area==S.selectedArea and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,45)
+    ab.BorderSizePixel=0 ab.Text=area
+    ab.TextColor3=Color3.fromRGB(255,255,255)
+    ab.TextSize=11 ab.Font=Enum.Font.Gotham
+    Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
+    areaBtns[area]=ab
+    ab.MouseButton1Click:Connect(function()
+        S.selectedArea=area areaSelLbl.Text="Selected: "..area saveSettings()
+        for a,b in pairs(areaBtns) do
+            b.BackgroundColor3=a==area and Color3.fromRGB(65,65,155) or Color3.fromRGB(28,28,45)
+        end
+    end)
+end
+sec(fp,"Safe Mode")
+tog(fp,"Safe Mode",S.safeModeEnabled,function(v) S.safeModeEnabled=v saveSettings() end)
+inp(fp,"Flee HP %",S.safeModeHP,function(v) S.safeModeHP=tonumber(v) or 20 saveSettings() end)
+inp(fp,"Fight HP %",S.safeModeFightHP,function(v) S.safeModeFightHP=tonumber(v) or 80 saveSettings() end)
+
+-- UPGRADE TAB
+local up=tabPages["Upgrade"]
+sec(up,"Machines")
+local machineList={"Conveyor","Appraiser","Polisher","Upgrader","Molder","Classifier","Enchanter","Ascender"}
+for _,m in ipairs(machineList) do
+    tog(up,m,S.upgradeEnabled[m],function(v) S.upgradeEnabled[m]=v saveSettings() end)
+end
+
+-- LOOT TAB
+local lp=tabPages["Loot"]
+sec(lp,"Auto Loot")
+tog(lp,"Auto Loot",S.lootEnabled,function(v) S.lootEnabled=v saveSettings() end)
+dualBtn(lp,"By Rarity","By Price",S.lootMode=="Rarity",
+    function() S.lootMode="Rarity" saveSettings() end,
+    function() S.lootMode="Price" saveSettings() end)
+dropdown(lp,"Min Rarity",RARITIES,S.lootMinRarity,function(v) S.lootMinRarity=v saveSettings() end)
+inp(lp,"Min Price",tostring(S.lootMinWorth),function(v) S.lootMinWorth=parsePrice(v) saveSettings() end)
+sldr(lp,"Loot Radius",500,10000,S.lootRadius,function(v) S.lootRadius=v saveSettings() end)
+
+-- ENCHANT TAB
+local ep=tabPages["Enchant"]
+sec(ep,"Enchant Sniper")
+for pi=1,3 do
+    local preset=S.enchantPresets[pi]
+    local presetHeader=Instance.new("Frame",ep)
+    presetHeader.Size=UDim2.new(1,0,0,34)
+    presetHeader.BackgroundColor3=Color3.fromRGB(25,25,40)
+    presetHeader.BorderSizePixel=0
+    Instance.new("UICorner",presetHeader).CornerRadius=UDim.new(0,8)
+    local presetLbl=Instance.new("TextLabel",presetHeader)
+    presetLbl.Size=UDim2.new(1,-56,1,0)
+    presetLbl.Position=UDim2.new(0,10,0,0)
+    presetLbl.BackgroundTransparency=1
+    presetLbl.Text=preset.name
+    presetLbl.TextColor3=Color3.fromRGB(180,180,240)
+    presetLbl.TextSize=13
+    presetLbl.Font=Enum.Font.GothamBold
+    presetLbl.TextXAlignment=Enum.TextXAlignment.Left
+    local ptog=Instance.new("TextButton",presetHeader)
+    ptog.Size=UDim2.new(0,44,0,22)
+    ptog.Position=UDim2.new(1,-52,0.5,-11)
+    ptog.BackgroundColor3=preset.enabled and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+    ptog.BorderSizePixel=0
+    ptog.Text=preset.enabled and "ON" or "OFF"
+    ptog.TextColor3=Color3.fromRGB(255,255,255)
+    ptog.TextSize=11 ptog.Font=Enum.Font.GothamBold
+    Instance.new("UICorner",ptog).CornerRadius=UDim.new(0,11)
+    ptog.MouseButton1Click:Connect(function()
+        preset.enabled=not preset.enabled
+        ptog.BackgroundColor3=preset.enabled and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+        ptog.Text=preset.enabled and "ON" or "OFF"
+        saveSettings()
+    end)
+    for i=1,3 do
+        local slot=preset.slots[i]
+        local rowFrame=Instance.new("Frame",ep)
+        rowFrame.Size=UDim2.new(1,0,0,34)
+        rowFrame.BackgroundColor3=Color3.fromRGB(18,18,30)
+        rowFrame.BorderSizePixel=0
+        Instance.new("UICorner",rowFrame).CornerRadius=UDim.new(0,8)
+        local slotLbl=Instance.new("TextLabel",rowFrame)
+        slotLbl.Size=UDim2.new(0,14,1,0)
+        slotLbl.Position=UDim2.new(0,6,0,0)
+        slotLbl.BackgroundTransparency=1
+        slotLbl.Text=tostring(i)
+        slotLbl.TextColor3=Color3.fromRGB(120,120,160)
+        slotLbl.TextSize=11
+        slotLbl.Font=Enum.Font.GothamBold
+        local etog=Instance.new("TextButton",rowFrame)
+        etog.Size=UDim2.new(0,40,0,22)
+        etog.Position=UDim2.new(0,22,0.5,-11)
+        etog.BackgroundColor3=slot.enabled and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+        etog.BorderSizePixel=0
+        etog.Text=slot.enabled and "ON" or "OFF"
+        etog.TextColor3=Color3.fromRGB(255,255,255)
+        etog.TextSize=10 etog.Font=Enum.Font.GothamBold
+        Instance.new("UICorner",etog).CornerRadius=UDim.new(0,11)
+        etog.MouseButton1Click:Connect(function()
+            slot.enabled=not slot.enabled
+            etog.BackgroundColor3=slot.enabled and Color3.fromRGB(0,160,75) or Color3.fromRGB(55,55,75)
+            etog.Text=slot.enabled and "ON" or "OFF"
+            saveSettings()
+        end)
+        local enchBtn=Instance.new("TextButton",rowFrame)
+        enchBtn.Size=UDim2.new(0,100,0,24)
+        enchBtn.Position=UDim2.new(0,66,0.5,-12)
+        enchBtn.BackgroundColor3=Color3.fromRGB(32,32,52)
+        enchBtn.BorderSizePixel=0
+        enchBtn.Text=slot.enchant.." ▾"
+        enchBtn.TextColor3=Color3.fromRGB(255,255,255)
+        enchBtn.TextSize=11 enchBtn.Font=Enum.Font.Gotham
+        Instance.new("UICorner",enchBtn).CornerRadius=UDim.new(0,6)
+        local enchOpen=false
+        local enchList=nil
+        local function closeEnch() if enchList then enchList:Destroy() enchList=nil end enchOpen=false end
+        local function openEnch()
+            closeEnch() enchOpen=true
+            local lh=math.min(#ENCHANTS*26,180)
+            local screenW=workspace.CurrentCamera.ViewportSize.X
+            local screenH=workspace.CurrentCamera.ViewportSize.Y
+            local ap=enchBtn.AbsolutePosition
+            local as=enchBtn.AbsoluteSize
+            local yPos=ap.Y+as.Y+2
+            if yPos+lh>screenH-10 then yPos=ap.Y-lh-2 end
+            yPos=math.max(yPos,5)
+            local xPos=ap.X
+            if xPos+as.X>screenW-5 then xPos=screenW-as.X-5 end
+            xPos=math.max(xPos,5)
+            local dl=Instance.new("Frame",screenGui)
+            dl.Size=UDim2.new(0,as.X,0,lh)
+            dl.Position=UDim2.new(0,xPos,0,yPos)
+            dl.BackgroundColor3=Color3.fromRGB(22,22,38)
+            dl.BorderSizePixel=0 dl.ZIndex=200
+            Instance.new("UICorner",dl).CornerRadius=UDim.new(0,6)
+            local ds=Instance.new("ScrollingFrame",dl)
+            ds.Size=UDim2.new(1,0,1,0) ds.BackgroundTransparency=1
+            ds.BorderSizePixel=0 ds.ScrollBarThickness=3
+            ds.CanvasSize=UDim2.new(0,0,0,#ENCHANTS*28) ds.ZIndex=200
+            local dll=Instance.new("UIListLayout",ds) dll.Padding=UDim.new(0,2)
+            local dlp=Instance.new("UIPadding",ds)
+            dlp.PaddingTop=UDim.new(0,2) dlp.PaddingLeft=UDim.new(0,2) dlp.PaddingRight=UDim.new(0,2)
+            for _,en in ipairs(ENCHANTS) do
+                local eb=Instance.new("TextButton",ds)
+                eb.Size=UDim2.new(1,-4,0,24)
+                eb.BackgroundColor3=en==slot.enchant and Color3.fromRGB(55,55,115) or Color3.fromRGB(32,32,52)
+                eb.BorderSizePixel=0 eb.Text=en
+                eb.TextColor3=Color3.fromRGB(215,215,235)
+                eb.TextSize=11 eb.Font=Enum.Font.Gotham eb.ZIndex=201
+                Instance.new("UICorner",eb).CornerRadius=UDim.new(0,4)
+                eb.MouseButton1Click:Connect(function()
+                    slot.enchant=en enchBtn.Text=en.." ▾"
+                    closeEnch() saveSettings()
+                end)
+            end
+            enchList=dl
+        end
+        enchBtn.MouseButton1Click:Connect(function()
+            if enchOpen then closeEnch() else openEnch() end
+        end)
+        UserInputService.InputBegan:Connect(function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 and enchOpen then
+                local mp=UserInputService:GetMouseLocation()
+                if enchList then
+                    local ap=enchList.AbsolutePosition
+                    local as=enchList.AbsoluteSize
+                    if mp.X<ap.X or mp.X>ap.X+as.X or mp.Y<ap.Y or mp.Y>ap.Y+as.Y then closeEnch() end
+                end
+            end
+        end)
+        local lm=Instance.new("TextButton",rowFrame)
+        lm.Size=UDim2.new(0,22,0,22)
+        lm.Position=UDim2.new(0,170,0.5,-11)
+        lm.BackgroundColor3=Color3.fromRGB(75,35,75)
+        lm.BorderSizePixel=0 lm.Text="-"
+        lm.TextColor3=Color3.fromRGB(255,255,255) lm.TextSize=14 lm.Font=Enum.Font.GothamBold
+        Instance.new("UICorner",lm).CornerRadius=UDim.new(0,6)
+        local ld=Instance.new("TextLabel",rowFrame)
+        ld.Size=UDim2.new(0,66,0,22)
+        ld.Position=UDim2.new(0,196,0.5,-11)
+        ld.BackgroundColor3=Color3.fromRGB(28,28,48) ld.BorderSizePixel=0
+        ld.Text=ROMAN[slot.minLevel].."("..slot.minLevel..")"
+        ld.TextColor3=Color3.fromRGB(255,255,255) ld.TextSize=10 ld.Font=Enum.Font.GothamBold
+        Instance.new("UICorner",ld).CornerRadius=UDim.new(0,4)
+        local lp3=Instance.new("TextButton",rowFrame)
+        lp3.Size=UDim2.new(0,22,0,22)
+        lp3.Position=UDim2.new(0,266,0.5,-11)
+        lp3.BackgroundColor3=Color3.fromRGB(35,75,55) lp3.BorderSizePixel=0
+        lp3.Text="+" lp3.TextColor3=Color3.fromRGB(255,255,255)
+        lp3.TextSize=14 lp3.Font=Enum.Font.GothamBold
+        Instance.new("UICorner",lp3).CornerRadius=UDim.new(0,6)
+        lm.MouseButton1Click:Connect(function()
+            if slot.minLevel>1 then slot.minLevel=slot.minLevel-1 ld.Text=ROMAN[slot.minLevel].."("..slot.minLevel..")" saveSettings() end
+        end)
+        lp3.MouseButton1Click:Connect(function()
+            if slot.minLevel<30 then slot.minLevel=slot.minLevel+1 ld.Text=ROMAN[slot.minLevel].."("..slot.minLevel..")" saveSettings() end
+        end)
+    end
+    if pi<3 then
+        local spacer=Instance.new("Frame",ep)
+        spacer.Size=UDim2.new(1,0,0,4)
+        spacer.BackgroundTransparency=1
+    end
+end
+
+-- COMBAT TAB
+local cp=tabPages["Combat"]
+sec(cp,"Anchor Position")
+sldr(cp,"X Offset",-20,20,S.anchorX,function(v) S.anchorX=v anchorCFrame=nil saveSettings() end)
+sldr(cp,"Y Offset",-10,10,S.anchorY,function(v) S.anchorY=v anchorCFrame=nil saveSettings() end)
+sldr(cp,"Z Offset",-20,20,S.anchorZ,function(v) S.anchorZ=v anchorCFrame=nil saveSettings() end)
+sec(cp,"Anchor Orientation")
+sldr(cp,"Pitch",-90,90,S.anchorPitch,function(v) S.anchorPitch=v anchorCFrame=nil saveSettings() end)
+sldr(cp,"Yaw",-180,180,S.anchorYaw,function(v) S.anchorYaw=v anchorCFrame=nil saveSettings() end)
+sec(cp,"Attack")
+sldr(cp,"Attack Range",1,80,S.attackRange,function(v) S.attackRange=v saveSettings() end)
+sec(cp,"Movement")
+tog(cp,"Noclip",S.noclipEnabled,function(v) S.noclipEnabled=v saveSettings() end)
+sldr(cp,"Walk Speed",16,150,S.walkSpeed,function(v)
+    S.walkSpeed=v saveSettings()
+    local char=localplr.Character
+    if char then local hum=char:FindFirstChildOfClass("Humanoid") if hum then hum.WalkSpeed=v end end
+end)
+
+-- CONFIG TAB
+local cfgp=tabPages["Config"]
+sec(cfgp,"Discord Webhook")
+local _,whbox=inp(cfgp,"Webhook URL",S.webhookUrl,function(v) S.webhookUrl=v saveSettings() end)
+whbox.ClearTextOnFocus=false
+sec(cfgp,"Share Config")
+local shareBox=Instance.new("TextBox",cfgp)
+shareBox.Size=UDim2.new(1,0,0,34)
+shareBox.BackgroundColor3=Color3.fromRGB(20,20,32)
+shareBox.BorderSizePixel=0
+shareBox.Text="" shareBox.PlaceholderText="Paste or copy config here..."
+shareBox.TextColor3=Color3.fromRGB(255,255,255)
+shareBox.PlaceholderColor3=Color3.fromRGB(85,85,115)
+shareBox.TextSize=11 shareBox.Font=Enum.Font.Gotham shareBox.ClearTextOnFocus=false
+Instance.new("UICorner",shareBox).CornerRadius=UDim.new(0,8)
+local cfgRow=Instance.new("Frame",cfgp)
+cfgRow.Size=UDim2.new(1,0,0,32) cfgRow.BackgroundTransparency=1
+local copyBtn=Instance.new("TextButton",cfgRow)
+copyBtn.Size=UDim2.new(0.5,-3,1,0) copyBtn.BackgroundColor3=Color3.fromRGB(35,85,45)
+copyBtn.BorderSizePixel=0 copyBtn.Text="Copy Config"
+copyBtn.TextColor3=Color3.fromRGB(255,255,255) copyBtn.TextSize=12 copyBtn.Font=Enum.Font.GothamBold
+Instance.new("UICorner",copyBtn).CornerRadius=UDim.new(0,8)
+copyBtn.MouseButton1Click:Connect(function()
+    local code=HttpService:JSONEncode(S)
+    shareBox.Text=code
+    pcall(function() setclipboard(code) end)
+    setStatus("Config copied!")
+end)
+local importBtn=Instance.new("TextButton",cfgRow)
+importBtn.Size=UDim2.new(0.5,-3,1,0) importBtn.Position=UDim2.new(0.5,3,0,0)
+importBtn.BackgroundColor3=Color3.fromRGB(85,35,35) importBtn.BorderSizePixel=0
+importBtn.Text="Import Config"
+importBtn.TextColor3=Color3.fromRGB(255,255,255) importBtn.TextSize=12 importBtn.Font=Enum.Font.GothamBold
+Instance.new("UICorner",importBtn).CornerRadius=UDim.new(0,8)
+importBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        local data=HttpService:JSONDecode(shareBox.Text)
+        for k,v in pairs(data) do S[k]=v end
+        farmEnabled=S.farmEnabled
+        setStatus("Config imported")
+    end)
+end)
+sec(cfgp,"Stats")
+local statsLbl=Instance.new("TextLabel",cfgp)
+statsLbl.Size=UDim2.new(1,0,0,70)
+statsLbl.BackgroundColor3=Color3.fromRGB(20,20,32) statsLbl.BorderSizePixel=0
+statsLbl.TextColor3=Color3.fromRGB(190,190,220) statsLbl.TextSize=11 statsLbl.Font=Enum.Font.Gotham
+statsLbl.TextXAlignment=Enum.TextXAlignment.Left statsLbl.TextYAlignment=Enum.TextYAlignment.Top
+statsLbl.Text="Loading..." statsLbl.RichText=true
+Instance.new("UICorner",statsLbl).CornerRadius=UDim.new(0,8)
+local slp2=Instance.new("UIPadding",statsLbl)
+slp2.PaddingLeft=UDim.new(0,8) slp2.PaddingTop=UDim.new(0,4)
+
+-- CORE FUNCTIONS
+local function getHotbarItem(slot)
+    local hb=localplr.PlayerGui.SigminiPackUI.Inventory.Hotbar[tostring(slot)]
+    if not hb then return nil end
+    for _,v in ipairs(hb:GetChildren()) do if v:IsA("TextButton") then return v end end
+end
+local function equipSword()
+    pcall(function()
+        local item=getHotbarItem(S.swordHotbarSlot)
+        if item then fireBtn(item) end
+    end)
+end
+local function isSwordEquipped()
+    if not localplr.Character then return false end
+    for _,v in ipairs(localplr.Character:GetChildren()) do
+        if v:IsA("Tool") then return true end
+    end
+    return false
+end
+local function isAtBase()
+    local char=localplr.Character
+    if not char then return true end
+    local rp=char:FindFirstChild("HumanoidRootPart")
+    if not rp then return true end
+    local npcs=workspace:FindFirstChild("NPCs")
+    if not npcs then return true end
+    for _,obj in ipairs(npcs:GetChildren()) do
+        for _,name in ipairs(TARGET_NAMES) do
+            if obj.Name==name then
+                local h=obj:FindFirstChildWhichIsA("Humanoid")
+                if h and h.Health>0 and (rp.Position-obj:GetPivot().Position).Magnitude<MAX_TARGET_DISTANCE then
+                    return false
+                end
+            end
+        end
+    end
+    return true
+end
+local function resetCharacter()
+    pcall(function()
+        local char=localplr.Character
+        if char then
+            local rp=char:FindFirstChild("HumanoidRootPart")
+            if rp then rp.Anchored=false end
+            char.Humanoid.Health=0
+        end
+    end)
+end
+local function tpToTarget(target)
+    pcall(function()
+        local char=localplr.Character
+        if not char then return end
+        local rp=char:FindFirstChild("HumanoidRootPart")
+        if not rp then return end
+        local tp=nil
+        pcall(function() tp=target:GetPivot().Position end)
+        if not tp then return end
+        rp.CFrame=buildAnchorCFrame(tp)
+    end)
+end
+
+-- LOOPS
+RunService.Stepped:Connect(function()
+    if S.noclipEnabled then
+        local char=localplr.Character
+        if char then
+            for _,p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide=false end
+            end
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local char=localplr.Character
+        if char then
+            local hum=char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.WalkSpeed=S.walkSpeed end
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if not farmEnabled then continue end
+        if not isSwordEquipped() then equipSword() end
+    end
+end)
+localplr.CharacterAdded:Connect(function() anchorCFrame=nil end)
+
+-- Safe mode
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if not S.safeModeEnabled then continue end
+        local h,m=getHP()
+        if m<=0 then continue end
+        local pct=(h/m)*100
+        if pct<=S.safeModeHP and not safeModeActive then
+            safeModeActive=true isAttacking=false anchorCFrame=nil
+            setStatus("SAFE MODE - Returning!")
+            pcall(function()
+                local returnBtn=localplr.PlayerGui.Main.Top.Teleports.Return.Btn
+                fireBtn(returnBtn)
+            end)
+            task.wait(4)
+            setStatus("SAFE MODE - Recovering...")
+        elseif pct>=S.safeModeFightHP and safeModeActive then
+            safeModeActive=false
+            setStatus("Safe mode off - resuming")
+            task.wait(1)
+            travelToArea(S.selectedArea)
+            task.wait(8) equipSword()
+        end
+    end
+end)
+
+-- Auto upgrade
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local anyEnabled=false
+        for _,v in pairs(S.upgradeEnabled) do if v then anyEnabled=true break end end
+        if not anyEnabled then continue end
+        local cash=getCash()
+        local pGui=localplr.PlayerGui
+        local machines={"Conveyor","Appraiser","Polisher","Upgrader","Molder","Classifier","Enchanter","Ascender"}
+        local bbMachines={"Appraiser","Polisher","Upgrader","Molder","Classifier","Enchanter"}
+        local cheapCost=math.huge local cheapBtn=nil
+        for _,m in ipairs(machines) do
+            if S.upgradeEnabled[m] then
+                pcall(function()
+                    local btn=pGui.Main.Upgrades.Main[m].Upgrade
+                    local cl=btn:FindFirstChild("Cost")
+                    if cl and not cl.Text:find("MAXED") and not cl.Text:find("%?") and not cl.Text:find("Prestige") then
+                        local cost=parsePrice(cl.Text)
+                        if cost<=cash and cost<cheapCost then cheapCost=cost cheapBtn=btn end
+                    end
+                end)
+            end
+        end
+        for _,m in ipairs(bbMachines) do
+            if S.upgradeEnabled[m] then
+                pcall(function()
+                    local bu=pGui.Backboard[m].Main.Upgrades.Main
+                    for _,uf in ipairs(bu:GetChildren()) do
+                        pcall(function()
+                            local ub=uf:FindFirstChild("Upgrade")
+                            if ub then
+                                local cl=ub:FindFirstChild("Cost")
+                                if cl and not cl.Text:find("%?") and cl.Text:find("Purchase") then
+                                    local cost=parsePrice(cl.Text)
+                                    if cost<=cash and cost<cheapCost then cheapCost=cost cheapBtn=ub end
+                                end
+                            end
+                        end)
+                    end
+                end)
+                pcall(function()
+                    local sb=pGui.Main.Upgrades.Main[m].Upgrade
+                    local sc=sb:FindFirstChild("Cost")
+                    if sc and sc.Text:find("Prestige") then
+                        local pb=pGui.Backboard[m].Main.Upgrades.Prestige.Upgrade
+                        local cl=pb:FindFirstChild("Cost")
+                        if cl and not cl.Text:find("%?") and cl.Text:find("Prestige") then
+                            local cost=parsePrice(cl.Text)
+                            if cost<=cash and cost<cheapCost then cheapCost=cost cheapBtn=pb end
+                        end
+                    end
+                end)
+            end
+        end
+        if cheapBtn then
+            local c=getconnections(cheapBtn.MouseButton1Click)
+            for _,v in pairs(c) do pcall(v.Function) end
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- Auto loot
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if not S.lootEnabled then continue end
+        if taskRunning then continue end
+        local char=localplr.Character
+        if not char then continue end
+        local rp=char:FindFirstChild("HumanoidRootPart")
+        if not rp then continue end
+        local myPos=rp.Position
+        local sf=workspace:FindFirstChild("Swords")
+        if not sf then continue end
+        for _,sword in ipairs(sf:GetChildren()) do
+            if not S.lootEnabled then break end
+            local data=getSwordInfo(sword)
+            if not data then continue end
+            if not data.selling:find("Deletes in") then continue end
+            local swordPos=nil
+            pcall(function() swordPos=sword:GetPivot().Position end)
+            if not swordPos then continue end
+            if (myPos-swordPos).Magnitude>S.lootRadius then continue end
+            local passes=false
+            if S.lootMode=="Rarity" then
+                passes=(RARITY_RANK[data.rarity] or 0)>=(RARITY_RANK[S.lootMinRarity] or 0)
+            else
+                passes=data.worth>=S.lootMinWorth
+            end
+            if not passes then continue end
+            local sw=sword local sp=swordPos
+            addTask("loot",function()
+                setStatus("Looting sword...")
+                local char2=localplr.Character
+                if not char2 then return end
+                local rp2=char2:FindFirstChild("HumanoidRootPart")
+                if not rp2 then return end
+                local wasAttacking=isAttacking
+                isAttacking=false
+                local savedCF=rp2.CFrame
+                rp2.Anchored=false
+                rp2.CFrame=CFrame.new(sp+Vector3.new(0,2,0))
+                task.wait(0.3)
+                local picked=not sw.Parent
+                if not picked then
+                    rp2.CFrame=CFrame.new(sp+Vector3.new(0,1,0))
+                    task.wait(0.3)
+                    picked=not sw.Parent
+                end
+                if picked then stats.swordsCollected=stats.swordsCollected+1 end
+                rp2.CFrame=savedCF
+                isAttacking=wasAttacking
+            end)
+            runNextTask()
+            task.wait(0.3)
+        end
+    end
+end)
+
+-- Enchant sniper
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local sf=workspace:FindFirstChild("Swords")
+        if not sf then continue end
+        for _,sword in ipairs(sf:GetChildren()) do
+            local data=getSwordInfo(sword)
+            if not data then continue end
+            if not data.selling:find("Selling in") then continue end
+            if data.owner~=localplr.Name then continue end
+            for _,preset in ipairs(S.enchantPresets) do
+                if not preset.enabled then continue end
+                if presetMatches(data,preset) then
+                    local desc=preset.name..": "
+                    for _,slot in ipairs(preset.slots) do
+                        if slot.enabled and slot.enchant~="None" then
+                            desc=desc..slot.enchant.." "..ROMAN[slot.minLevel].."+  "
+                        end
+                    end
+                    local sw=sword
+                    addTask("enchantSnipe",function()
+                        setStatus("Enchant match: "..desc)
+                        local char2=localplr.Character
+                        if not char2 then return end
+                        local rp2=char2:FindFirstChild("HumanoidRootPart")
+                        if not rp2 then return end
+                        local savedCF=rp2.CFrame
+                        pickupSword(sw)
+                        task.wait(0.2)
+                        if rp2 then rp2.CFrame=savedCF end
+                        sendWebhook("🗡 Enchant Match! "..preset.name,desc,0xFFD700)
+                    end)
+                    runNextTask()
+                    task.wait(1)
+                    break
+                end
+            end
+        end
+    end
+end)
+
+-- Attack
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if not isAttacking or not farmEnabled or safeModeActive then continue end
+        local char=localplr.Character
+        if not char then continue end
+        local rp=char:FindFirstChild("HumanoidRootPart")
+        if not rp then continue end
+        rp.Anchored=false
+        if anchorCFrame then
+            local dist=(rp.Position-anchorCFrame.Position).Magnitude
+            if dist>0.5 then rp.CFrame=anchorCFrame end
+        end
+        local tool=getEquippedTool()
+        if tool then pcall(function() tool:Activate() end) end
+        task.wait(0.05)
+    end
+end)
+
+-- Travel
+task.spawn(function()
+    while true do
+        task.wait(3)
+        if not farmEnabled then continue end
+        if taskRunning then continue end
+        if safeModeActive then continue end
+        if isAtBase() then
+            setStatus("At base, travelling...")
+            travelToArea(S.selectedArea)
+            task.wait(8) equipSword()
+        end
+    end
+end)
+
+localplr.CharacterAdded:Connect(function()
+    anchorCFrame=nil
+    if not farmEnabled then return end
+    task.wait(3) equipSword()
+    task.wait(1)
+    if isAtBase() then
+        travelToArea(S.selectedArea)
+        task.wait(8) equipSword()
+    end
+end)
+
+-- Stats
+task.spawn(function()
+    stats.moneyStart=getCash()
+    while true do
+        task.wait(5)
+        stats.moneyNow=getCash()
+        local elapsed=tick()-stats.sessionStart
+        local hrs=math.max(elapsed/3600,0.001)
+        statsLbl.Text=string.format(
+            "<b>💰 Money/hr:</b> $%d\n<b>⚔ Kills/hr:</b> %d\n<b>🗡 Swords:</b> %d\n<b>⏱ Session:</b> %dm",
+            math.floor((stats.moneyNow-stats.moneyStart)/hrs),
+            math.floor(stats.kills/hrs),
+            stats.swordsCollected,
+            math.floor(elapsed/60)
+        )
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(600)
+        if S.webhookUrl=="" then continue end
+        local elapsed=tick()-stats.sessionStart
+        local hrs=math.max(elapsed/3600,0.001)
+        sendWebhook("📊 Stats",string.format(
+            "💰 Money/hr: $%d\n⚔ Kills/hr: %d\n🗡 Swords: %d\n⏱ Session: %dm",
+            math.floor((stats.moneyNow-stats.moneyStart)/hrs),
+            math.floor(stats.kills/hrs),
+            stats.swordsCollected,
+            math.floor(elapsed/60)
+        ),0x00AAFF)
+    end
+end)
+
+-- FARMING LOOP
+local function findTarget(rp)
+    local nearest=nil local nearestDist=math.huge
+    local myPos=rp.Position
+    local npcs=workspace:FindFirstChild("NPCs")
+    if not npcs then return nil end
+    for _,obj in ipairs(npcs:GetChildren()) do
+        local isTarget=false
+        for _,name in ipairs(TARGET_NAMES) do
+            if obj.Name==name then isTarget=true break end
+        end
+        if isTarget then
+            local h=obj:FindFirstChildWhichIsA("Humanoid")
+            if h and h.Health>0 then
+                local d=(myPos-obj:GetPivot().Position).Magnitude
+                if d<nearestDist and d<MAX_TARGET_DISTANCE then nearestDist=d nearest=obj end
+            end
+        end
+    end
+    return nearest
+end
+
+local function getChar()
+    local c=localplr.Character
+    if not c then localplr.CharacterAdded:Wait() c=localplr.Character end
+    return c
+end
+
+local function computePath(rp,tp)
+    local path=PathfindingService:CreatePath({AgentRadius=2,AgentHeight=5,AgentCanJump=true,AgentCanClimb=false})
+    local ok=pcall(function() path:ComputeAsync(rp.Position,tp) end)
+    if ok and path.Status==Enum.PathStatus.Success then return path:GetWaypoints() end
+    return nil
+end
+
+local lastTarget=nil local waypoints={} local waypointIdx=1 local lastWpIdx=0
+local stuckTimer=0 local lastPos=nil local lastMoveTgt=nil
+local isUnstucking=false local stuckResetTimer=0
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if not farmEnabled then isAttacking=false continue end
+        if isUnstucking or taskRunning or safeModeActive then isAttacking=false continue end
+        local char=getChar()
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        local rp=char:FindFirstChild("HumanoidRootPart")
+        if not hum or not rp then continue end
+        local target=findTarget(rp)
+        if not target then isAttacking=false setStatus("Finding target...") continue end
+        local tp=nil
+        pcall(function() tp=target:GetPivot().Position end)
+        if not tp then continue end
+        local dist=(rp.Position-tp).Magnitude
+        if target~=lastTarget then
+            lastTarget=target waypointIdx=1 lastWpIdx=0 lastMoveTgt=nil
+            isAttacking=false stuckResetTimer=0 anchorCFrame=nil
+            if S.selectedMovement=="Pathfind" then waypoints=computePath(rp,tp) or {} end
+        end
+        if dist<S.attackRange then
+            if not anchorCFrame then
+                anchorCFrame=buildAnchorCFrame(tp)
+                rp.CFrame=anchorCFrame
+            end
+            isAttacking=true stuckResetTimer=0
+            setStatus("Attacking "..(target.Name or "target"))
+            lastMoveTgt=nil
+        else
+            isAttacking=false anchorCFrame=nil
+            if S.selectedMovement=="Teleport" then
+                setStatus("Teleporting to target")
+                tpToTarget(target) task.wait(0.1)
+            else
+                setStatus("Walking to target")
+                if lastPos then
+                    stuckTimer=stuckTimer+0.1 stuckResetTimer=stuckResetTimer+0.1
+                    if stuckTimer>=0.8 then
+                        if (rp.Position-lastPos).Magnitude<0.5 then
+                            isUnstucking=true
+                            hum:MoveTo(rp.Position) task.wait(0.1)
+                            hum.Jump=true task.wait(0.3)
+                            hum.Jump=true task.wait(0.3)
+                            waypoints=computePath(rp,tp) or {}
+                            waypointIdx=1 lastWpIdx=0 lastMoveTgt=nil
+                            isUnstucking=false
+                        end
+                        stuckTimer=0
+                    end
+                    if stuckResetTimer>=10 then
+                        if (rp.Position-lastPos).Magnitude<2 then
+                            isAttacking=false isUnstucking=false stuckResetTimer=0
+                            lastTarget=nil waypoints={}
+                            resetCharacter()
+                            repeat task.wait(0.1) until
+                                localplr.Character and
+                                localplr.Character:FindFirstChildWhichIsA("Humanoid") and
+                                localplr.Character:FindFirstChildWhichIsA("Humanoid").Health>0
+                            task.wait(3) equipSword()
+                            task.wait(1) travelToArea(S.selectedArea)
+                            task.wait(8) equipSword()
+                        else stuckResetTimer=0 end
+                    end
+                end
+                lastPos=rp.Position
+                if #waypoints>0 and waypointIdx<=#waypoints then
+                    local wp=waypoints[waypointIdx]
+                    if (rp.Position-wp.Position).Magnitude<4 then waypointIdx=waypointIdx+1 lastMoveTgt=nil end
+                    if waypointIdx~=lastWpIdx and waypointIdx<=#waypoints then
+                        local nwp=waypoints[waypointIdx]
+                        if nwp.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
+                        hum:MoveTo(nwp.Position) lastWpIdx=waypointIdx
+                    end
+                else
+                    if lastMoveTgt~=tp then hum:MoveTo(tp) lastMoveTgt=tp end
+                end
+            end
+        end
+    end
+end)
