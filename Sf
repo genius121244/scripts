@@ -1,4 +1,4 @@
-
+-- SFS v17  |  auto-execute recommended for boss/priority server hop
 task.wait(2)
 
 local PathfindingService = game:GetService("PathfindingService")
@@ -340,18 +340,27 @@ end
 -- Confirmed: Area.Main.Title text is '🔒 LOCKED' for locked areas, area name for unlocked
 local unlockedCache = {}  -- cache so we don't re-check every tick
 local function isAreaUnlocked(areaName)
-    if unlockedCache[areaName]~=nil then return unlockedCache[areaName] end
-    local unlocked = false
+    if unlockedCache[areaName]==true then return true end
+    -- Don't cache false — could be GUI not loaded yet
+    local ok, unlocked = false, false
     pcall(function()
-        local title = localplr.PlayerGui.PlotUI.TeleportUI.Areas.List[areaName].Main.Title
-        -- If Title text contains LOCKED it's locked; otherwise it shows the area name
+        local areaList = localplr.PlayerGui.PlotUI.TeleportUI.Areas.List
+        local areaFrame = areaList:FindFirstChild(areaName)
+        if not areaFrame then return end
+        local main = areaFrame:FindFirstChild("Main")
+        if not main then return end
+        local title = main:FindFirstChild("Title")
+        if not title then return end
+        ok = true
+        -- Locked areas show '🔒 LOCKED', unlocked show the area name
         unlocked = not title.Text:upper():find("LOCKED")
     end)
-    unlockedCache[areaName] = unlocked
+    -- Only cache if we successfully read the value
+    if ok then unlockedCache[areaName] = unlocked end
     return unlocked
 end
 
--- Clear cache periodically so newly unlocked areas are picked up
+-- Clear cache periodically so newly unlocked areas are detected
 task.spawn(function()
     while true do
         task.wait(30)
@@ -1582,10 +1591,19 @@ task.spawn(function()
                         local sp=nil pcall(function() sp=sw:GetPivot().Position end)
                         if sp then
                             if pmov=="Teleport" then
-                                local saved=rp2.CFrame rp2.CFrame=CFrame.new(sp+Vector3.new(0,2,0)) task.wait(0.3) rp2.CFrame=saved
+                                local saved=rp2.CFrame
+                                rp2.Anchored=false
+                                rp2.CFrame=CFrame.new(sp+Vector3.new(0,2,0))
+                                task.wait(1)  -- sit on sword for 1 full second
+                                rp2.CFrame=saved
                             else
                                 local hum2=c2:FindFirstChildOfClass("Humanoid")
-                                if hum2 then hum2:MoveTo(sp) local t0=tick() while (rp2.Position-sp).Magnitude>3 and tick()-t0<10 do task.wait(0.1) end end
+                                if hum2 then
+                                    hum2:MoveTo(sp)
+                                    local t0=tick()
+                                    while (rp2.Position-sp).Magnitude>3 and tick()-t0<10 do task.wait(0.1) end
+                                    task.wait(1)  -- sit on sword for 1 full second
+                                end
                             end
                         end
                         sendWebhook("🗡 Enchant Match! "..preset.name,desc,0xFFD700)
