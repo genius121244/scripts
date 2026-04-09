@@ -1,0 +1,994 @@
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local SellGasRemote = RS.Packages.Knit.Services.BaseService.RE.SellGas
+local PurchaseRemote = RS.Packages.Knit.Services.StoresService.RE.Purchase
+local GasPrice = RS.GasPrice
+
+local old = player.PlayerGui:FindFirstChild("OilEmpireV5")
+if old then old:Destroy() end
+
+
+-- plot
+
+local function getMyPlotName()
+    return player:GetAttribute("Plot")
+end
+
+local function getMyPlot()
+    local name = getMyPlotName()
+    if name then
+        local p = workspace.Plots:FindFirstChild(name)
+        if p then return p end
+    end
+    for _, plot in pairs(workspace.Plots:GetChildren()) do
+        local ot = plot:FindFirstChild("OwnerTag")
+        if ot then
+            for _, v in pairs(ot:GetDescendants()) do
+                if v:IsA("TextLabel") and v.Text == player.Name .. "'s Base" then
+                    return plot
+                end
+            end
+        end
+    end
+end
+
+local function getEnemyPlots()
+    local list = {}
+    local myName = getMyPlotName()
+    for _, plot in pairs(workspace.Plots:GetChildren()) do
+        if plot.Name == myName then continue end
+        local ot = plot:FindFirstChild("OwnerTag")
+        if ot then
+            for _, v in pairs(ot:GetDescendants()) do
+                if v:IsA("TextLabel") and v.Text:find("'s Base") and v.Text ~= "YOUR BASE" then
+                    table.insert(list, plot)
+                    break
+                end
+            end
+        end
+    end
+    return list
+end
+
+
+-- settings
+
+local Settings = {
+    AutoSell         = false,
+    MinSellPrice     = 1,
+    AutoSteal        = false,
+    AutoCollect      = false,
+    AutoBuyDrill     = false,
+    AutoBuyRefinery  = false,
+    BuyDrillItems    = {},
+    BuyRefineryItems = {},
+}
+
+
+-- help func 
+
+local function getRootPart()
+    local c = player.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local savedPos = nil
+
+local function savePos()
+    local r = getRootPart()
+    if r then savedPos = r.CFrame end
+end
+
+local function returnPos()
+    local r = getRootPart()
+    if r and savedPos then
+        r.CFrame = savedPos
+        task.wait(0.1)
+    end
+end
+
+local function returnPosWithDelay(delay)
+    task.wait(delay)
+    local r = getRootPart()
+    if r and savedPos then
+        r.CFrame = savedPos
+        task.wait(0.1)
+    end
+end
+
+local function tpTo(pos)
+    local r = getRootPart()
+    if r then
+        r.CFrame = CFrame.new(pos)
+        task.wait(0.2)
+    end
+end
+
+local function getCash()
+    local ls = player:FindFirstChild("leaderstats")
+    return ls and ls:FindFirstChild("Cash") and ls.Cash.Value or 0
+end
+
+local function getGas()
+    local ls = player:FindFirstChild("leaderstats")
+    return ls and ls:FindFirstChild("Gasoline") and ls.Gasoline.Value or 0
+end
+
+local function isRefinery(building)
+    local primary = building:FindFirstChild("Primary")
+    if not primary then return false end
+    return primary:FindFirstChild("StealAtc") ~= nil
+end
+
+local function getStealPP(building)
+    local primary = building:FindFirstChild("Primary")
+    if not primary then return nil end
+    local stealAtc = primary:FindFirstChild("StealAtc")
+    if not stealAtc then return nil end
+    return stealAtc:FindFirstChildOfClass("ProximityPrompt")
+end
+
+local function getStealAmount(pp)
+    if not pp then return 0 end
+    local amt = pp.ActionText:match("%((%d+) gasoline%)")
+    return tonumber(amt) or 0
+end
+
+local function getPPPos(pp)
+    if not pp then return nil end
+    local parent = pp.Parent
+    if parent:IsA("Attachment") then return parent.WorldPosition
+    elseif parent:IsA("BasePart") then return parent.Position end
+    local p = parent.Parent
+    while p do
+        if p:IsA("BasePart") then return p.Position end
+        p = p.Parent
+    end
+    return nil
+end
+
+
+-- price parser
+
+local function parsePriceText(text)
+    local clean = text:gsub("[$,]", ""):upper()
+    local num, suffix = clean:match("^([%d%.]+)([KMBT]?)$")
+    if not num then return 0 end
+    local val = tonumber(num) or 0
+    if suffix == "K" then val = val * 1e3
+    elseif suffix == "M" then val = val * 1e6
+    elseif suffix == "B" then val = val * 1e9
+    elseif suffix == "T" then val = val * 1e12 end
+    return val
+end
+
+local function parseStock(stockText)
+    local n = stockText:match("X(%d+)")
+    return tonumber(n) or 1
+end
+
+
+-- item reader
+
+local function getShopItems(guiName)
+    local items = {}
+    local gui = player.PlayerGui:FindFirstChild("Main")
+    if not gui then return items end
+    local shop = gui:FindFirstChild(guiName)
+    if not shop then return items end
+    local list = shop:FindFirstChild("List")
+    if not list then return items end
+
+    for _, item in pairs(list:GetChildren()) do
+        if item.Name == "Template" or item.Name == "Sekme" then continue end
+        local buttons = item:FindFirstChild("Buttons")
+        if not buttons then continue end
+        local buyBtn = buttons:FindFirstChild("Buy")
+        if not buyBtn then continue end
+        local priceLabel = buyBtn:FindFirstChild("TextLabel")
+        if not priceLabel then continue end
+        local price = priceLabel.Text
+        if price == "N/A" or price == "" then continue end
+        local stockLabel = item:FindFirstChild("Stock")
+        local stock = stockLabel and stockLabel.Text or "?"
+        if stock:find("X0") or stock == "Limited Time" then continue end
+        local vp = item:FindFirstChild("ViewportFrame")
+        local nameLabel = vp and vp:FindFirstChild("ItemName")
+        local itemName = (nameLabel and nameLabel.Text ~= ""
+            and nameLabel.Text ~= "[PARTNAME]")
+            and nameLabel.Text or item.Name
+        table.insert(items, {
+            name     = itemName,
+            price    = price,
+            priceVal = parsePriceText(price),
+            stock    = stock,
+        })
+    end
+
+    table.sort(items, function(a, b) return a.priceVal < b.priceVal end)
+    return items
+end
+
+
+-- gui
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "OilEmpireV5"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ScreenGui.DisplayOrder = 999
+ScreenGui.Parent = player.PlayerGui
+
+local Overlay = Instance.new("Frame")
+Overlay.Size = UDim2.new(1, 0, 1, 0)
+Overlay.BackgroundTransparency = 1
+Overlay.ZIndex = 500
+Overlay.Active = false
+Overlay.Parent = ScreenGui
+
+local Panel = Instance.new("Frame")
+Panel.Name = "Panel"
+Panel.Size = UDim2.new(0, 265, 0, 42)
+Panel.Position = UDim2.new(0, 12, 0.2, 0)
+Panel.BackgroundColor3 = Color3.fromRGB(13, 13, 13)
+Panel.BorderSizePixel = 0
+Panel.Active = true
+Panel.Draggable = true
+Panel.ClipsDescendants = true
+Panel.ZIndex = 100
+Panel.Parent = ScreenGui
+Instance.new("UICorner", Panel).CornerRadius = UDim.new(0, 10)
+local pStroke = Instance.new("UIStroke", Panel)
+pStroke.Color = Color3.fromRGB(255, 185, 0)
+pStroke.Thickness = 1.5
+
+local TBar = Instance.new("Frame")
+TBar.Size = UDim2.new(1, 0, 0, 42)
+TBar.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+TBar.BorderSizePixel = 0
+TBar.ZIndex = 101
+TBar.Parent = Panel
+Instance.new("UICorner", TBar).CornerRadius = UDim.new(0, 10)
+
+local TTitle = Instance.new("TextLabel")
+TTitle.Size = UDim2.new(0.78, 0, 1, 0)
+TTitle.Position = UDim2.new(0.04, 0, 0, 0)
+TTitle.BackgroundTransparency = 1
+TTitle.Text = "🛢️  Oil Empire Script"
+TTitle.TextColor3 = Color3.fromRGB(255, 200, 0)
+TTitle.Font = Enum.Font.GothamBold
+TTitle.TextSize = 14
+TTitle.TextXAlignment = Enum.TextXAlignment.Left
+TTitle.ZIndex = 102
+TTitle.Parent = TBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -36, 0.5, -14)
+MinBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+MinBtn.Text = "+"
+MinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 16
+MinBtn.BorderSizePixel = 0
+MinBtn.ZIndex = 102
+MinBtn.Parent = TBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Size = UDim2.new(1, 0, 1, -42)
+Scroll.Position = UDim2.new(0, 0, 0, 42)
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+Scroll.ScrollBarThickness = 3
+Scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 185, 0)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Scroll.ZIndex = 101
+Scroll.Parent = Panel
+
+local SLayout = Instance.new("UIListLayout", Scroll)
+SLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SLayout.Padding = UDim.new(0, 3)
+
+local SPad = Instance.new("UIPadding", Scroll)
+SPad.PaddingLeft = UDim.new(0, 8)
+SPad.PaddingRight = UDim.new(0, 8)
+SPad.PaddingTop = UDim.new(0, 6)
+SPad.PaddingBottom = UDim.new(0, 6)
+
+local rowOrder = 0
+local function nextOrder()
+    rowOrder += 1
+    return rowOrder
+end
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, 0, 0, 18)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "Plot: " .. (getMyPlotName() or "?") .. "  |  Idle"
+StatusLabel.TextColor3 = Color3.fromRGB(140, 210, 255)
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextSize = 11
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.LayoutOrder = nextOrder()
+StatusLabel.ZIndex = 102
+StatusLabel.Parent = Scroll
+
+local PriceLabel = Instance.new("TextLabel")
+PriceLabel.Size = UDim2.new(1, 0, 0, 18)
+PriceLabel.BackgroundTransparency = 1
+PriceLabel.Text = "Gas: 0  |  Cash: $0  |  Price: $0"
+PriceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+PriceLabel.Font = Enum.Font.Gotham
+PriceLabel.TextSize = 11
+PriceLabel.TextXAlignment = Enum.TextXAlignment.Left
+PriceLabel.LayoutOrder = nextOrder()
+PriceLabel.ZIndex = 102
+PriceLabel.Parent = Scroll
+
+local function setStatus(msg)
+    StatusLabel.Text = "Plot: " .. (getMyPlotName() or "?") .. "  |  " .. msg
+end
+
+local function makeDivider()
+    local d = Instance.new("Frame")
+    d.Size = UDim2.new(1, 0, 0, 1)
+    d.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    d.BorderSizePixel = 0
+    d.LayoutOrder = nextOrder()
+    d.ZIndex = 102
+    d.Parent = Scroll
+end
+
+local function makeToggle(label, settingKey)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = Color3.fromRGB(155, 28, 28)
+    btn.Text = "  " .. label .. "   OFF"
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.BorderSizePixel = 0
+    btn.LayoutOrder = nextOrder()
+    btn.ZIndex = 102
+    btn.Parent = Scroll
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(function()
+        Settings[settingKey] = not Settings[settingKey]
+        btn.BackgroundColor3 = Settings[settingKey]
+            and Color3.fromRGB(0, 148, 65) or Color3.fromRGB(155, 28, 28)
+        btn.Text = "  " .. label .. "   " .. (Settings[settingKey] and "ON" or "OFF")
+    end)
+    return btn
+end
+
+local function makeNumberInput(label, default, onChange)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 28)
+    row.BackgroundTransparency = 1
+    row.LayoutOrder = nextOrder()
+    row.ZIndex = 102
+    row.Parent = Scroll
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.62, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(190, 190, 190)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 103
+    lbl.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.36, 0, 0.82, 0)
+    box.Position = UDim2.new(0.63, 0, 0.09, 0)
+    box.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+    box.Text = tostring(default)
+    box.TextColor3 = Color3.fromRGB(255, 215, 80)
+    box.Font = Enum.Font.GothamBold
+    box.TextSize = 12
+    box.ClearTextOnFocus = false
+    box.BorderSizePixel = 0
+    box.ZIndex = 103
+    box.Parent = row
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+    Instance.new("UIStroke", box).Color = Color3.fromRGB(55, 55, 55)
+
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then onChange(n) else box.Text = tostring(default) end
+    end)
+end
+
+local activeDropdown = nil
+local function closeActiveDropdown()
+    if activeDropdown then
+        activeDropdown.Visible = false
+        activeDropdown = nil
+    end
+end
+
+local function makeMultiDropdown(label, guiName, settingKey)
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, 0, 0, 18)
+    header.BackgroundTransparency = 1
+    header.Text = "  " .. label .. " (open shop first):"
+    header.TextColor3 = Color3.fromRGB(180, 180, 180)
+    header.Font = Enum.Font.Gotham
+    header.TextSize = 11
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.LayoutOrder = nextOrder()
+    header.ZIndex = 102
+    header.Parent = Scroll
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 28)
+    btn.BackgroundColor3 = Color3.fromRGB(28, 48, 72)
+    btn.Text = "  Tap to select items ▼"
+    btn.TextColor3 = Color3.fromRGB(200, 220, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 11
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.BorderSizePixel = 0
+    btn.LayoutOrder = nextOrder()
+    btn.ZIndex = 102
+    btn.Parent = Scroll
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local selectedLabel = Instance.new("TextLabel")
+    selectedLabel.Size = UDim2.new(1, 0, 0, 0)
+    selectedLabel.AutomaticSize = Enum.AutomaticSize.Y
+    selectedLabel.BackgroundTransparency = 1
+    selectedLabel.Text = "  None selected"
+    selectedLabel.TextColor3 = Color3.fromRGB(100, 200, 130)
+    selectedLabel.Font = Enum.Font.Gotham
+    selectedLabel.TextSize = 10
+    selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    selectedLabel.TextWrapped = true
+    selectedLabel.LayoutOrder = nextOrder()
+    selectedLabel.ZIndex = 102
+    selectedLabel.Parent = Scroll
+
+    local function updateSelectedLabel()
+        local t = Settings[settingKey]
+        if not t or #t == 0 then
+            selectedLabel.Text = "  None selected"
+        else
+            selectedLabel.Text = "  ✓ " .. table.concat(t, "\n  ✓ ")
+        end
+    end
+
+    local ddPanel = Instance.new("Frame")
+    ddPanel.Size = UDim2.new(0, 249, 0, 0)
+    ddPanel.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+    ddPanel.BorderSizePixel = 0
+    ddPanel.Visible = false
+    ddPanel.ZIndex = 600
+    ddPanel.Parent = Overlay
+    Instance.new("UICorner", ddPanel).CornerRadius = UDim.new(0, 7)
+    local ddStroke = Instance.new("UIStroke", ddPanel)
+    ddStroke.Color = Color3.fromRGB(255, 185, 0)
+    ddStroke.Thickness = 1
+
+    local ddScroll = Instance.new("ScrollingFrame")
+    ddScroll.Size = UDim2.new(1, 0, 1, 0)
+    ddScroll.BackgroundTransparency = 1
+    ddScroll.BorderSizePixel = 0
+    ddScroll.ScrollBarThickness = 3
+    ddScroll.ScrollBarImageColor3 = Color3.fromRGB(255, 185, 0)
+    ddScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    ddScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    ddScroll.ZIndex = 601
+    ddScroll.Parent = ddPanel
+    local ddLayout = Instance.new("UIListLayout", ddScroll)
+    ddLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    local ddPad = Instance.new("UIPadding", ddScroll)
+    ddPad.PaddingTop = UDim.new(0, 3)
+    ddPad.PaddingBottom = UDim.new(0, 3)
+
+    local function closeDD()
+        ddPanel.Visible = false
+        if activeDropdown == ddPanel then activeDropdown = nil end
+    end
+
+    local function isSelected(name)
+        local t = Settings[settingKey]
+        if not t then return false end
+        for _, v in pairs(t) do
+            if v == name then return true end
+        end
+        return false
+    end
+
+    local function toggleItem(name)
+        if not Settings[settingKey] then Settings[settingKey] = {} end
+        local t = Settings[settingKey]
+        for i, v in pairs(t) do
+            if v == name then table.remove(t, i) return end
+        end
+        table.insert(t, name)
+    end
+
+    local function openDD()
+        closeActiveDropdown()
+        activeDropdown = ddPanel
+        local absPos = btn.AbsolutePosition
+        local absSize = btn.AbsoluteSize
+        ddPanel.Position = UDim2.new(0, absPos.X, 0, absPos.Y + absSize.Y + 4)
+
+        for _, c in pairs(ddScroll:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+
+        local items = getShopItems(guiName)
+        local rowH = 26
+        local maxVisible = 8
+
+        local clearBtn = Instance.new("TextButton")
+        clearBtn.Size = UDim2.new(1, 0, 0, rowH)
+        clearBtn.BackgroundTransparency = 1
+        clearBtn.Text = "  ✕  Clear All"
+        clearBtn.TextColor3 = Color3.fromRGB(200, 90, 90)
+        clearBtn.Font = Enum.Font.GothamBold
+        clearBtn.TextSize = 11
+        clearBtn.TextXAlignment = Enum.TextXAlignment.Left
+        clearBtn.ZIndex = 602
+        clearBtn.LayoutOrder = 0
+        clearBtn.Parent = ddScroll
+        clearBtn.MouseButton1Click:Connect(function()
+            Settings[settingKey] = {}
+            updateSelectedLabel()
+            openDD()
+        end)
+
+        if #items == 0 then
+            local empty = Instance.new("TextButton")
+            empty.Size = UDim2.new(1, 0, 0, rowH)
+            empty.BackgroundTransparency = 1
+            empty.Text = "  Open shop in-game first!"
+            empty.TextColor3 = Color3.fromRGB(150, 150, 150)
+            empty.Font = Enum.Font.Gotham
+            empty.TextSize = 11
+            empty.TextXAlignment = Enum.TextXAlignment.Left
+            empty.ZIndex = 602
+            empty.LayoutOrder = 1
+            empty.Parent = ddScroll
+        end
+
+        for i, item in ipairs(items) do
+            local selected = isSelected(item.name)
+            local row = Instance.new("TextButton")
+            row.Size = UDim2.new(1, 0, 0, rowH)
+            row.BackgroundColor3 = selected
+                and Color3.fromRGB(0, 100, 45) or Color3.fromRGB(20, 20, 20)
+            row.BackgroundTransparency = selected and 0 or 1
+            row.Text = "  " .. (selected and "✓ " or "  ")
+                .. item.name .. "   " .. item.price .. "   " .. item.stock
+            row.TextColor3 = selected
+                and Color3.fromRGB(100, 255, 150) or Color3.fromRGB(225, 225, 225)
+            row.Font = Enum.Font.Gotham
+            row.TextSize = 10
+            row.TextXAlignment = Enum.TextXAlignment.Left
+            row.ZIndex = 602
+            row.LayoutOrder = i
+            row.Parent = ddScroll
+
+            local sep = Instance.new("Frame")
+            sep.Size = UDim2.new(1, -12, 0, 1)
+            sep.Position = UDim2.new(0, 6, 1, -1)
+            sep.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+            sep.BorderSizePixel = 0
+            sep.ZIndex = 602
+            sep.Parent = row
+
+            local capturedName = item.name
+            local capturedPrice = item.price
+            row.MouseButton1Click:Connect(function()
+                toggleItem(capturedName)
+                local sel = isSelected(capturedName)
+                row.BackgroundTransparency = sel and 0 or 1
+                row.BackgroundColor3 = sel
+                    and Color3.fromRGB(0, 100, 45) or Color3.fromRGB(20, 20, 20)
+                row.Text = "  " .. (sel and "✓ " or "  ")
+                    .. capturedName .. "   " .. capturedPrice
+                row.TextColor3 = sel
+                    and Color3.fromRGB(100, 255, 150) or Color3.fromRGB(225, 225, 225)
+                updateSelectedLabel()
+            end)
+        end
+
+        local totalH = (#items + 1) * rowH + 6
+        ddPanel.Size = UDim2.new(0, 249, 0, math.min(totalH, maxVisible * rowH))
+        ddPanel.Visible = true
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        if ddPanel.Visible then closeDD() else openDD() end
+    end)
+end
+
+
+-- build
+
+makeDivider()
+makeToggle("Auto Sell", "AutoSell")
+makeNumberInput("  Min Gas Price ($)", 1, function(v)
+    Settings.MinSellPrice = v
+end)
+makeDivider()
+makeToggle("Auto Collect", "AutoCollect")
+makeDivider()
+makeToggle("Auto Steal", "AutoSteal")
+makeDivider()
+makeToggle("Auto Buy Drill", "AutoBuyDrill")
+makeMultiDropdown("Drills", "DrillShop", "BuyDrillItems")
+makeDivider()
+makeToggle("Auto Buy Refinery", "AutoBuyRefinery")
+makeMultiDropdown("Refineries", "RefineryShop", "BuyRefineryItems")
+
+
+-- minimize
+
+local expanded = false
+local function setExpanded(state)
+    expanded = state
+    Panel:TweenSize(
+        UDim2.new(0, 265, 0, expanded and 380 or 42),
+        Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.18, true
+    )
+    MinBtn.Text = expanded and "–" or "+"
+    if not expanded then closeActiveDropdown() end
+end
+MinBtn.MouseButton1Click:Connect(function()
+    setExpanded(not expanded)
+end)
+
+
+-- queue
+
+local taskQueue = {}
+local queueRunning = false
+
+local function queueTask(fn)
+    table.insert(taskQueue, fn)
+end
+
+local function runQueue()
+    if queueRunning then return end
+    queueRunning = true
+    task.spawn(function()
+        while #taskQueue > 0 do
+            local fn = table.remove(taskQueue, 1)
+            local ok, err = pcall(fn)
+            if not ok then
+                setStatus("ERR: " .. tostring(err):sub(1, 55))
+                warn("[OilEmpireV5] " .. tostring(err))
+            end
+            task.wait(0.3)
+        end
+        queueRunning = false
+    end)
+end
+
+
+-- auto sell
+
+local function doAutoSell()
+    local gas = getGas()
+    if gas <= 0 then setStatus("No gas to sell") return end
+    local price = GasPrice.Value
+    if price < Settings.MinSellPrice then
+        setStatus("Price $" .. price .. " < min $" .. Settings.MinSellPrice)
+        return
+    end
+    savePos()
+    local sellStore = workspace.Stores:FindFirstChild("Sell")
+    if sellStore then
+        local main = sellStore:FindFirstChild("Main")
+        if main then
+            local primary = main:FindFirstChild("Primary")
+            if primary and primary:IsA("BasePart") then
+                local r = getRootPart()
+                if r then
+                    r.CFrame = CFrame.new(primary.Position + Vector3.new(0, 3, 0))
+                end
+                task.wait(0.2)
+            end
+        end
+    end
+    SellGasRemote:FireServer()
+    task.wait(0.2)
+    setStatus("Sold " .. gas .. " gas @ $" .. price)
+    returnPos()
+end
+
+
+-- auto collect
+
+local lastCollect = 0
+local function doAutoCollect()
+    if tick() - lastCollect < 15 then return end
+    lastCollect = tick()
+
+    local myPlot = getMyPlot()
+    if not myPlot then setStatus("Plot not found!") return end
+    local buildings = myPlot:FindFirstChild("Buildings")
+    if not buildings then return end
+
+    local count = 0
+    savePos()
+
+    for _, building in pairs(buildings:GetChildren()) do
+        if not isRefinery(building) then continue end
+        local pp = getStealPP(building)
+        if not pp then continue end
+        local pos = getPPPos(pp)
+        if not pos then continue end
+        local r = getRootPart()
+        if r then r.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z) end
+        task.wait(0.8)
+        count += 1
+    end
+
+    returnPos()
+    if count == 0 then
+        setStatus("No refineries found")
+    else
+        setStatus("Collected from " .. count .. " refineries")
+    end
+end
+
+
+-- auto steal (modified with 2 second delay before returning to base)
+
+local stealCooldowns = {}
+local function doAutoSteal()
+    local enemies = getEnemyPlots()
+    local stoleCount = 0
+
+    for _, plot in pairs(enemies) do
+        local pname = plot.Name
+        if stealCooldowns[pname] and tick() - stealCooldowns[pname] < 25 then continue end
+
+        local buildings = plot:FindFirstChild("Buildings")
+        if not buildings then continue end
+
+        local bestPP, bestAmt, bestBuilding = nil, 0, nil
+        for _, building in pairs(buildings:GetChildren()) do
+            if not isRefinery(building) then continue end
+            local pp = getStealPP(building)
+            if not pp then continue end
+            if not pp.Enabled then continue end
+            local amt = getStealAmount(pp)
+            if amt > 0 and amt > bestAmt then
+                bestAmt = amt
+                bestPP = pp
+                bestBuilding = building
+            end
+        end
+
+        if bestPP and bestBuilding then
+            savePos()
+            setStatus("Stealing " .. bestAmt .. " gas from " .. pname)
+
+            local stealPos = getPPPos(bestPP)
+            if not stealPos then
+                returnPos()
+                continue
+            end
+
+            -- Tp to enemy refinery
+            local r = getRootPart()
+            if r then
+                r.CFrame = CFrame.new(stealPos.X, stealPos.Y + 3, stealPos.Z)
+            end
+            task.wait(0.3)
+
+            local oldDist = bestPP.MaxActivationDistance
+            bestPP.MaxActivationDistance = 999
+
+            local holdTime = bestPP.HoldDuration + math.random(1, 5) * 0.1
+            local ok, err = pcall(fireproximityprompt, bestPP, holdTime)
+            if not ok then warn("[Steal] " .. tostring(err)) end
+            task.wait(holdTime + 0.5)
+
+            bestPP.MaxActivationDistance = oldDist
+            stealCooldowns[pname] = tick()
+            stoleCount += 1
+
+            -- Tp to own refinery to claim
+            local myPlot = getMyPlot()
+            if myPlot then
+                local myBuildings = myPlot:FindFirstChild("Buildings")
+                if myBuildings then
+                    for _, b in pairs(myBuildings:GetChildren()) do
+                        if not isRefinery(b) then continue end
+                        local myPP = getStealPP(b)
+                        if myPP then
+                            local claimPos = getPPPos(myPP)
+                            if claimPos then
+                                local r2 = getRootPart()
+                                if r2 then
+                                    r2.CFrame = CFrame.new(
+                                        claimPos.X, claimPos.Y + 3, claimPos.Z
+                                    )
+                                end
+                                task.wait(0.6)
+                            end
+                        end
+                        break
+                    end
+                end
+            end
+
+            
+            returnPosWithDelay(.5)
+        end
+    end
+
+    if stoleCount == 0 then
+        local anyReady = false
+        for _, plot in pairs(enemies) do
+            local buildings = plot:FindFirstChild("Buildings")
+            if buildings then
+                for _, building in pairs(buildings:GetChildren()) do
+                    if not isRefinery(building) then continue end
+                    local pp = getStealPP(building)
+                    if pp and pp.Enabled and getStealAmount(pp) > 0 then
+                        anyReady = true break
+                    end
+                end
+            end
+            if anyReady then break end
+        end
+        setStatus(anyReady and "Steal on cooldown" or "Waiting for full refineries")
+    else
+        setStatus("Stole from " .. stoleCount .. " plot(s)")
+    end
+end
+
+
+-- auto buy
+
+local buyJobs = {
+    { setting="AutoBuyDrill",    itemsKey="BuyDrillItems",    remoteKey="DrillShop",    storeName="Drill Shop"    },
+    { setting="AutoBuyRefinery", itemsKey="BuyRefineryItems", remoteKey="RefineryShop", storeName="Refinery Shop" },
+}
+
+local buyStatus = {}
+
+RS.Packages.Knit.Services.StoresService.RE.ReStock.OnClientEvent:Connect(function()
+    for k in pairs(buyStatus) do buyStatus[k] = nil end
+    setStatus("Shop restocked!")
+end)
+
+local function doAutoBuy()
+    for _, job in pairs(buyJobs) do
+        if not Settings[job.setting] then continue end
+        local selectedItems = Settings[job.itemsKey]
+        if not selectedItems or #selectedItems == 0 then continue end
+
+        local anyToBuy = false
+        for _, itemName in pairs(selectedItems) do
+            if buyStatus[itemName] == "oos" then continue end
+            local itemData = nil
+            for _, item in pairs(getShopItems(job.remoteKey)) do
+                if item.name == itemName then itemData = item break end
+            end
+            if itemData and getCash() >= parsePriceText(itemData.price) then
+                anyToBuy = true break
+            end
+        end
+
+        if not anyToBuy then
+            for _, itemName in pairs(selectedItems) do
+                if buyStatus[itemName] == "oos" then continue end
+                local itemData = nil
+                for _, item in pairs(getShopItems(job.remoteKey)) do
+                    if item.name == itemName then itemData = item break end
+                end
+                if not itemData then
+                    if buyStatus[itemName] ~= "oos" then
+                        buyStatus[itemName] = "oos"
+                        setStatus(itemName .. " out of stock")
+                    end
+                elseif getCash() < parsePriceText(itemData.price) then
+                    if buyStatus[itemName] ~= "broke" then
+                        buyStatus[itemName] = "broke"
+                        setStatus("Can't afford " .. itemName)
+                    end
+                end
+            end
+            continue
+        end
+
+        savePos()
+        local store = workspace.Stores:FindFirstChild(job.storeName)
+        if store then
+            local main = store:FindFirstChild("Main")
+            if main then
+                local primary = main:FindFirstChild("Primary")
+                if primary and primary:IsA("BasePart") then
+                    local r = getRootPart()
+                    if r then
+                        r.CFrame = CFrame.new(primary.Position + Vector3.new(0, 4, 0))
+                    end
+                    task.wait(0.15)
+                end
+            end
+        end
+
+        for _, itemName in pairs(selectedItems) do
+            if buyStatus[itemName] == "oos" then continue end
+            local itemData = nil
+            for _, item in pairs(getShopItems(job.remoteKey)) do
+                if item.name == itemName then itemData = item break end
+            end
+            if not itemData then
+                if buyStatus[itemName] ~= "oos" then
+                    buyStatus[itemName] = "oos"
+                    setStatus(itemName .. " out of stock")
+                end
+                continue
+            end
+            local price = parsePriceText(itemData.price)
+            if getCash() < price then
+                if buyStatus[itemName] ~= "broke" then
+                    buyStatus[itemName] = "broke"
+                    setStatus("Can't afford " .. itemName)
+                end
+                continue
+            end
+            local maxToBuy = parseStock(itemData.stock)
+            for i = 1, maxToBuy do
+                if getCash() < price then
+                    buyStatus[itemName] = "broke"
+                    break
+                end
+                PurchaseRemote:FireServer(job.remoteKey, itemName)
+                setStatus("Bought " .. i .. "/" .. maxToBuy .. "x " .. itemName)
+                task.wait(0.2)
+            end
+            buyStatus[itemName] = "oos"
+        end
+
+        returnPos()
+    end
+end
+
+
+-- live updates
+
+task.spawn(function()
+    while task.wait(1) do
+        PriceLabel.Text = string.format(
+            "Gas: %d  |  Cash: $%d  |  Price: $%d  |  Min: $%d",
+            getGas(), getCash(), GasPrice.Value, Settings.MinSellPrice
+        )
+    end
+end)
+
+
+-- main loop
+
+task.spawn(function()
+    while task.wait(1) do
+        if not queueRunning then
+            if Settings.AutoSell then queueTask(doAutoSell) end
+            if Settings.AutoCollect then queueTask(doAutoCollect) end
+            if Settings.AutoSteal then queueTask(doAutoSteal) end
+            if Settings.AutoBuyDrill or Settings.AutoBuyRefinery then
+                queueTask(doAutoBuy)
+            end
+            runQueue()
+        end
+    end
+end)
+
+print("[OilEmpireV5] Loaded | Plot: " .. (getMyPlotName() or "?"))
