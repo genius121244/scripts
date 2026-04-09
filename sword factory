@@ -1587,7 +1587,7 @@ task.spawn(function()
         pcall(function()
             local traitsFolder = findAscenderTraits()
             if not traitsFolder then
-                setStatus("Ascender: UI not found - stand near ascender?")
+                setStatus("Ascender: UI not found")
                 return
             end
             local traitFrame = traitsFolder:FindFirstChild(cur)
