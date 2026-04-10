@@ -19,11 +19,22 @@ local MOBILE_KEY = "SFS_V17_STORE"
 local TARGET_NAMES        = {"Archer","Martial","Melee"}
 local MAX_TARGET_DISTANCE = 2000
 
+-- NPC Rarity is a raw number attribute (confirmed: Archer=64, beginner Melee=6).
+-- Area attribute maps to area index (1=Beginner's Trials ... 8=Ancient Mineshaft)
 local AREA_NAMES = {
-    "Beginner's Trials","Mystical Forest","Stranded Island","Snowy Fields",
-    "Crystal Caverns","Volcanic Isles","Intraplanetarium","Ancient Mineshaft"
+    "Beginner's Trials",  -- 1
+    "Mystical Forest",    -- 2
+    "Stranded Island",    -- 3
+    "Snowy Fields",       -- 4
+    "Crystal Caverns",    -- 5
+    "Volcanic Isles",     -- 6
+    "Intraplanetarium",   -- 7
+    "Ancient Mineshaft",  -- 8
+    "Heavenly Gates",     -- 9
 }
 
+-- Boss/Priority use NPC rarity raw numbers bucketed into display tiers
+-- Each tier covers a band of raw rarity values
 local RARITY_TIERS = {
     {name="Any",       min=0,   max=9999},
     {name="Common",    min=5,   max=9},
@@ -62,6 +73,7 @@ local function tierMaxRaw(name)
     for _,t in ipairs(RARITY_TIERS) do if t.name==name then return t.max end end return 9999
 end
 
+-- Full sword rarity strings (for loot/enchant) — these include - + ++ variants
 local RARITIES = {
     "Basic","Basic+","Basic++","Common-","Common","Common+","Common++",
     "Uncommon-","Uncommon","Uncommon+","Uncommon++","Rare-","Rare","Rare+","Rare++",
@@ -120,17 +132,20 @@ local DEFAULT_S = {
     safeModeHP         = 20,
     safeModeFightHP    = 80,
     safeModeType       = "home",
+    -- Priority (raw rarity numbers)
     priorityMinTier    = "Any",
     priorityCapTier    = "Infinity",
     priorityMinRaw     = 0,
     priorityCapRaw     = 9999,
     priorityServerHop  = false,
-    priorityKeepFarm   = true,
+    priorityKeepFarm   = true,  -- keep farming lower NPCs when no priority targets
+    -- Combat
     anchorPreset       = "Behind",
     attackRange        = 10,
     noclipEnabled      = false,
     walkSpeedEnabled   = false,
     walkSpeed          = 16,
+    -- Upgrade
     upgradeEnabled     = {
         Conveyor=false,Appraiser=false,Polisher=false,Upgrader=false,
         Molder=false,Classifier=false,Enchanter=false,Ascender=false
@@ -144,21 +159,25 @@ local DEFAULT_S = {
         Class   ={enabled=false,minutes=1},
         Enchant ={enabled=false,minutes=1},
     },
+    -- Loot
     lootEnabled        = false,
     lootMode           = "Rarity",
     lootMinRarity      = "Basic",
     lootMinWorth       = 0,
     lootRadius         = 5000,
+    -- Enchant (5 presets)
     enchantPresets     = {
         makePreset("Preset 1"),makePreset("Preset 2"),makePreset("Preset 3"),
         makePreset("Preset 4"),makePreset("Preset 5"),
     },
+    -- Misc
     antiAfkEnabled     = false,
     autoAddEnabled     = false,
     autoAddMinLevel    = 0,
     serverHopEnabled   = false,
     serverHopInterval  = 5,
     phoneOptimize      = false,
+    -- Config
     guiKeybind         = "RightShift",
     webhookUrl         = "",
 }
@@ -234,6 +253,7 @@ pcall(function()
     if raw then deepLoad(HttpService:JSONDecode(raw)) end
 end)
 
+-- Recalculate raw values from saved tier names after load
 S.priorityMinRaw = tierMinRaw(S.priorityMinTier)
 S.priorityCapRaw = tierMaxRaw(S.priorityCapTier)
 
@@ -324,10 +344,12 @@ local function travelToArea(areaName)
     end)
 end
 
+-- Confirmed: Area.Main.Title text is '🔒 LOCKED' for locked areas, area name for unlocked
 local unlockedCache = {}
 local _cachedPlayerLevel = 0
 local _lastLevelCheck = 0
 
+-- Confirmed: Workspace.[name].Head.Gui.User text = '<b><font ...>[Lv 413]</font></b> name'
 local function getPlayerLevel()
     if tick()-_lastLevelCheck < 10 then return _cachedPlayerLevel end
     _lastLevelCheck = tick()
@@ -344,22 +366,35 @@ local function getPlayerLevel()
     return lvl
 end
 
+-- Confirmed from pathfinder:
+--   Areas.List.[AreaName].Main (TextButton)
+--   .Main.Title: area name when accessible, '🔒 LOCKED' when locked by purchase
+--   .Main.Level: 'LEVEL 0-19' (range) or 'LEVEL 420+' (minimum) or 'LEVEL 10+' etc.
+-- A player can enter if their level is >= the minimum shown.
+-- For ranges like '0-19' the player must be <= max. For '420+' they must be >= 420.
 local function isAreaUnlocked(areaName)
     if unlockedCache[areaName]==true then return true end
     local result=false
     pcall(function()
         local areaList=localplr.PlayerGui.PlotUI.TeleportUI.Areas.List
+        -- Areas.List has UIListLayout and UICorner as children too — use FindFirstChild
         local areaFrame=areaList:FindFirstChild(areaName)
         if not areaFrame then return end
         local main=areaFrame:FindFirstChild("Main") if not main then return end
+        -- Title check: locked by purchase shows LOCKED
         local title=main:FindFirstChild("Title")
         if not title then return end
         if title.Text:upper():find("LOCKED") then return end
+        -- Level check: parse range or minimum
         local levelLbl=main:FindFirstChild("Level")
         if levelLbl then
             local txt=levelLbl.Text:gsub("<[^>]+>",""):upper()
+            -- Format 'LEVEL 0-19': player must be <= 19 (max of range)
+            -- Format 'LEVEL 420+': player must be >= 420
+            -- Format 'LEVEL 10+': player must be >= 10
             local lo,hi=txt:match("(%d+)-(%d+)")
             if lo and hi then
+                -- Range format: player must be within [lo, hi]
                 local plvl=getPlayerLevel()
                 if plvl>0 then
                     if plvl<tonumber(lo) or plvl>tonumber(hi) then return end
@@ -384,6 +419,7 @@ end
 task.spawn(function()
     while true do task.wait(120) unlockedCache={} _cachedPlayerLevel=0 _lastLevelCheck=0 end
 end)
+
 
 local function hopServer()
     pcall(function()
@@ -536,6 +572,7 @@ local function isSwordEquipped()
     return false
 end
 
+
 -- ============================================================
 -- TASK QUEUE
 -- ============================================================
@@ -568,6 +605,7 @@ screenGui.Name="SFSv17" screenGui.ResetOnSpawn=false
 screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 screenGui.IgnoreGuiInset=true screenGui.Parent=localplr.PlayerGui
 
+-- Restore button (top-center)
 local restoreBtn=Instance.new("TextButton",screenGui)
 restoreBtn.Size=UDim2.new(0,90,0,28)
 restoreBtn.AnchorPoint=Vector2.new(0.5,0)
@@ -579,6 +617,7 @@ restoreBtn.Font=Enum.Font.GothamBold restoreBtn.Visible=false restoreBtn.ZIndex=
 Instance.new("UICorner",restoreBtn).CornerRadius=UDim.new(0,8)
 Instance.new("UIStroke",restoreBtn).Color=Color3.fromRGB(80,80,180)
 
+-- Main frame — centered top, resizable
 local mainW,mainH=460,560
 local main=Instance.new("Frame",screenGui)
 main.Size=UDim2.new(0,mainW,0,mainH)
@@ -590,6 +629,7 @@ Instance.new("UICorner",main).CornerRadius=UDim.new(0,12)
 local mStroke=Instance.new("UIStroke",main)
 mStroke.Color=Color3.fromRGB(45,45,75) mStroke.Thickness=1.5
 
+-- Resize handle (bottom-right corner)
 local resizeHandle=Instance.new("TextButton",main)
 resizeHandle.Size=UDim2.new(0,16,0,16)
 resizeHandle.AnchorPoint=Vector2.new(1,1)
@@ -622,6 +662,7 @@ do
     end)
 end
 
+-- Title bar
 local titleBar=Instance.new("Frame",main)
 titleBar.Size=UDim2.new(1,0,0,36) titleBar.BackgroundColor3=Color3.fromRGB(18,18,30) titleBar.BorderSizePixel=0
 Instance.new("UICorner",titleBar).CornerRadius=UDim.new(0,12)
@@ -645,6 +686,7 @@ end
 minBtn.MouseButton1Click:Connect(function() setVisible(false) end)
 restoreBtn.MouseButton1Click:Connect(function() setVisible(true) end)
 
+-- Keybind toggle
 UserInputService.InputBegan:Connect(function(inp,gp)
     if gp then return end
     local kb=S.guiKeybind or "RightShift"
@@ -652,6 +694,7 @@ UserInputService.InputBegan:Connect(function(inp,gp)
     if ok and key and inp.KeyCode==key then setVisible(not main.Visible) end
 end)
 
+-- Status bar
 local statusFrame=Instance.new("Frame",main)
 statusFrame.Size=UDim2.new(1,-12,0,20) statusFrame.Position=UDim2.new(0,6,0,40)
 statusFrame.BackgroundColor3=Color3.fromRGB(18,18,30) statusFrame.BorderSizePixel=0
@@ -663,6 +706,7 @@ statusLbl.TextColor3=Color3.fromRGB(120,120,180) statusLbl.TextSize=10
 statusLbl.Font=Enum.Font.Gotham statusLbl.TextXAlignment=Enum.TextXAlignment.Left
 local function setStatus(t) statusLbl.Text="◈ "..t end
 
+-- Tab bar
 local tabBarFrame=Instance.new("Frame",main)
 tabBarFrame.Size=UDim2.new(1,-12,0,24) tabBarFrame.Position=UDim2.new(0,6,0,64)
 tabBarFrame.BackgroundColor3=Color3.fromRGB(18,18,30) tabBarFrame.BorderSizePixel=0
@@ -937,6 +981,7 @@ dualBtn(fp,"Go Home","Platform",S.safeModeType=="home",
     function() S.safeModeType="home" saveSettings() end,
     function() S.safeModeType="platform" saveSettings() end)
 
+-- Farm mode selector — checkbox style, mutually exclusive
 sec(fp,"Farm Mode")
 
 local function makeCheckRow(parent, label, isActive, onActivate)
@@ -960,36 +1005,9 @@ local function makeCheckRow(parent, label, isActive, onActivate)
     return f, check
 end
 
--- Map section (declared before check rows so updateModeUI can reference it)
-local mapSection=Instance.new("Frame",fp)
-mapSection.BackgroundTransparency=1 mapSection.Size=UDim2.new(1,0,0,10)
-local mapLayout=Instance.new("UIListLayout",mapSection) mapLayout.Padding=UDim.new(0,4)
-mapLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    if mapSection.Visible then mapSection.Size=UDim2.new(1,0,0,mapLayout.AbsoluteContentSize.Y+2) end
-end)
+local mapCheckFrame, mapCheck
+local prioCheckFrame, prioCheck
 
--- Priority section (declared before check rows so updateModeUI can reference it)
-local prioSection=Instance.new("Frame",fp)
-prioSection.BackgroundTransparency=1 prioSection.Size=UDim2.new(1,0,0,10)
-local prioLayout=Instance.new("UIListLayout",prioSection) prioLayout.Padding=UDim.new(0,4)
-prioLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    if prioSection.Visible then prioSection.Size=UDim2.new(1,0,0,prioLayout.AbsoluteContentSize.Y+2) end
-end)
-
--- FIX: updateModeUI defined BEFORE the check rows that call it
-local mapCheck, prioCheck  -- forward declare so updateModeUI can reference them
-local function updateModeUI()
-    local isMap = S.farmMode=="Map"
-    mapSection.Visible = isMap
-    prioSection.Visible = not isMap
-    if isMap then
-        task.defer(function() mapSection.Size=UDim2.new(1,0,0,mapLayout.AbsoluteContentSize.Y+2) end)
-    else
-        task.defer(function() prioSection.Size=UDim2.new(1,0,0,prioLayout.AbsoluteContentSize.Y+2) end)
-    end
-end
-
-local mapCheckFrame, prioCheckFrame
 mapCheckFrame, mapCheck = makeCheckRow(fp, "🗺  Map Mode", S.farmMode=="Map", function()
     S.farmMode = "Map"
     mapCheck.BackgroundColor3 = Color3.fromRGB(65,65,175) mapCheck.Text = "✓"
@@ -1007,20 +1025,19 @@ prioCheckFrame, prioCheck = makeCheckRow(fp, "⭐  Priority Mode", S.farmMode=="
     updateModeUI() saveSettings()
 end)
 
--- Now add mapSection contents AFTER it's parented (order in ScrollingFrame = insertion order)
--- We need mapSection and prioSection to appear AFTER the check rows in the farm page.
--- Re-parent them now so they appear below the checkboxes:
-mapSection.Parent = nil
-prioSection.Parent = nil
-mapSection.Parent = fp
-prioSection.Parent = fp
-
+-- Map section
+local mapSection=Instance.new("Frame",fp)
+mapSection.BackgroundTransparency=1 mapSection.Size=UDim2.new(1,0,0,10)
+local mapLayout=Instance.new("UIListLayout",mapSection) mapLayout.Padding=UDim.new(0,4)
+mapLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    if mapSection.Visible then mapSection.Size=UDim2.new(1,0,0,mapLayout.AbsoluteContentSize.Y+2) end
+end)
 local mapSelLbl=Instance.new("TextLabel",mapSection)
 mapSelLbl.Size=UDim2.new(1,0,0,14) mapSelLbl.BackgroundTransparency=1
 mapSelLbl.Text="Active: "..S.selectedArea
 mapSelLbl.TextColor3=Color3.fromRGB(100,100,180) mapSelLbl.TextSize=10
 mapSelLbl.Font=Enum.Font.Gotham mapSelLbl.TextXAlignment=Enum.TextXAlignment.Left
-
+-- Area buttons
 local areaBtns={}
 for _,area in ipairs(AREA_NAMES) do
     local ab=Instance.new("TextButton",mapSection)
@@ -1031,6 +1048,7 @@ for _,area in ipairs(AREA_NAMES) do
     Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
     areaBtns[area]=ab
     ab.MouseButton1Click:Connect(function()
+        -- Don't allow selecting a locked area
         if not isAreaUnlocked(area) then
             setStatus("Area locked: "..area)
             return
@@ -1043,8 +1061,9 @@ for _,area in ipairs(AREA_NAMES) do
     end)
 end
 
+-- Update area buttons to show lock state after GUI loads
 task.defer(function()
-    task.wait(2)
+    task.wait(2) -- wait for GUI to be fully loaded
     for _,area in ipairs(AREA_NAMES) do
         local btn=areaBtns[area]
         if btn then
@@ -1057,6 +1076,13 @@ task.defer(function()
     end
 end)
 
+-- Priority section
+local prioSection=Instance.new("Frame",fp)
+prioSection.BackgroundTransparency=1 prioSection.Size=UDim2.new(1,0,0,10)
+local prioLayout=Instance.new("UIListLayout",prioSection) prioLayout.Padding=UDim.new(0,4)
+prioLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    if prioSection.Visible then prioSection.Size=UDim2.new(1,0,0,prioLayout.AbsoluteContentSize.Y+2) end
+end)
 tog(prioSection,"Server Hop (no targets)",S.priorityServerHop,function(v) S.priorityServerHop=v saveSettings() end)
 tog(prioSection,"Keep Farming (no targets)",S.priorityKeepFarm,function(v) S.priorityKeepFarm=v saveSettings() end)
 dropdown(prioSection,"Min Tier",TIER_NAMES,S.priorityMinTier,function(v)
@@ -1066,6 +1092,16 @@ dropdown(prioSection,"Cap Tier",TIER_NAMES,S.priorityCapTier,function(v)
     S.priorityCapTier=v S.priorityCapRaw=tierMaxRaw(v) saveSettings()
 end)
 
+local function updateModeUI()
+    local isMap = S.farmMode=="Map"
+    mapSection.Visible = isMap
+    prioSection.Visible = not isMap
+    if isMap then
+        task.defer(function() mapSection.Size=UDim2.new(1,0,0,mapLayout.AbsoluteContentSize.Y+2) end)
+    else
+        task.defer(function() prioSection.Size=UDim2.new(1,0,0,prioLayout.AbsoluteContentSize.Y+2) end)
+    end
+end
 task.defer(updateModeUI)
 
 -- ============================================================
@@ -1262,6 +1298,7 @@ for pi=1,5 do
     end
 end
 
+
 -- ============================================================
 -- COMBAT TAB
 -- ============================================================
@@ -1324,6 +1361,7 @@ menuTogBtn.TextColor3=Color3.fromRGB(255,255,255) menuTogBtn.TextSize=11 menuTog
 Instance.new("UICorner",menuTogBtn).CornerRadius=UDim.new(0,6)
 menuTogBtn.MouseButton1Click:Connect(function() setVisible(not main.Visible) end)
 
+-- Keybind: click to capture next keypress
 local kbFrame=Instance.new("Frame",cfgp) kbFrame.Size=UDim2.new(1,0,0,28)
 kbFrame.BackgroundColor3=Color3.fromRGB(20,20,32) kbFrame.BorderSizePixel=0
 Instance.new("UICorner",kbFrame).CornerRadius=UDim.new(0,6)
@@ -1353,6 +1391,7 @@ kbBtn.MouseButton1Click:Connect(function()
 end)
 
 sec(cfgp,"Discord Webhook")
+-- Webhook: full-width textarea to avoid overflow
 local whFrame=Instance.new("Frame",cfgp) whFrame.Size=UDim2.new(1,0,0,44)
 whFrame.BackgroundColor3=Color3.fromRGB(20,20,32) whFrame.BorderSizePixel=0
 Instance.new("UICorner",whFrame).CornerRadius=UDim.new(0,6)
@@ -1395,6 +1434,7 @@ importBtn.MouseButton1Click:Connect(function()
     if not ok or not data then setStatus("Import failed - invalid JSON") return end
     deepLoad(data)
     farmEnabled=S.farmEnabled
+    -- refresh keybind display
     kbBtn.Text=S.guiKeybind
     whBox.Text=S.webhookUrl
     updateModeUI()
@@ -1413,7 +1453,7 @@ Instance.new("UICorner",statsLbl).CornerRadius=UDim.new(0,6)
 local slp2=Instance.new("UIPadding",statsLbl) slp2.PaddingLeft=UDim.new(0,8) slp2.PaddingTop=UDim.new(0,4)
 
 -- ============================================================
--- NOCLIP
+-- NOCLIP (non-HRP parts only)
 -- ============================================================
 RunService.Stepped:Connect(function()
     if not S.noclipEnabled then return end
@@ -1442,17 +1482,19 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- ANTI AFK
+-- ANTI AFK (jump every 15 minutes)
 -- ============================================================
 task.spawn(function()
     while true do
-        task.wait(900)
+        task.wait(900) -- 15 minutes
         if not S.antiAfkEnabled then continue end
         setStatus("Anti AFK: jumping")
         pcall(function()
             local char=localplr.Character if not char then return end
             local hum=char:FindFirstChildOfClass("Humanoid") if not hum then return end
-            hum.Jump=true task.wait(0.1) hum.Jump=false
+            hum.Jump=true
+            task.wait(0.1)
+            hum.Jump=false
         end)
     end
 end)
@@ -1482,6 +1524,7 @@ task.spawn(function()
         end
     end
 end)
+
 
 -- Auto Upgrade
 task.spawn(function()
@@ -1531,43 +1574,8 @@ task.spawn(function()
     end
 end)
 
--- ============================================================
--- AUTO ASCENDER (FIX: robust path finder survives game updates)
--- ============================================================
-local function findAscenderTraits()
-    -- Try all known path variations across game updates
-    local paths = {
-        function() return workspace.Bases[localplr.Name].Ascender.Screen.UI.Main.Selection.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.ScreenGui.UI.Main.Selection.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.Screen.Main.Selection.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.UI.Main.Selection.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.Screen.UI.Selection.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.Screen.UI.Main.Traits end,
-        function() return workspace.Bases[localplr.Name].Ascender.GUI.Main.Selection.Traits end,
-    }
-    for _, pathFn in ipairs(paths) do
-        local ok, result = pcall(pathFn)
-        if ok and result then return result end
-    end
-    -- Fallback: recursive deep search under the player's Base for "Traits"
-    local function deepFind(obj, name, depth)
-        if depth > 12 then return nil end
-        for _, child in ipairs(obj:GetChildren()) do
-            if child.Name == name then return child end
-            local found = deepFind(child, name, depth + 1)
-            if found then return found end
-        end
-        return nil
-    end
-    local base = nil
-    pcall(function() base = workspace.Bases[localplr.Name] end)
-    if base then
-        local traits = deepFind(base, "Traits", 0)
-        if traits then return traits end
-    end
-    return nil
-end
-
+-- Auto Ascender
+-- CONFIRMED path: PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits.[Trait].Main.Ascend
 task.spawn(function()
     local traitIdx=1 local traitTimer=0 local lastTrait=nil
     while true do task.wait(1)
@@ -1583,55 +1591,11 @@ task.spawn(function()
         if lastTrait~=cur then traitTimer=0 lastTrait=cur end
         traitTimer+=1
         setStatus("Ascending: "..cur.." ("..traitTimer.."/"..limitSec.."s)")
-
         pcall(function()
-            local traitsFolder = findAscenderTraits()
-            if not traitsFolder then
-                setStatus("Ascender: UI not found")
-                return
-            end
-            local traitFrame = traitsFolder:FindFirstChild(cur)
-            -- Try case-insensitive fallback
-            if not traitFrame then
-                for _, child in ipairs(traitsFolder:GetChildren()) do
-                    if child.Name:lower() == cur:lower() then
-                        traitFrame = child break
-                    end
-                end
-            end
-            if not traitFrame then return end
-
-            -- Search for Ascend button under traitFrame
-            local ascBtn = nil
-            local traitMain = traitFrame:FindFirstChild("Main")
-            if traitMain then
-                ascBtn = traitMain:FindFirstChild("Ascend")
-                    or traitMain:FindFirstChild("AscendBtn")
-                    or traitMain:FindFirstChild("Button")
-            end
-            -- Fallback: recursive search for any TextButton named like "ascend"
-            if not ascBtn then
-                local function findBtn(obj, depth)
-                    if depth > 5 then return nil end
-                    for _, child in ipairs(obj:GetChildren()) do
-                        if child:IsA("TextButton") and (
-                            child.Name == "Ascend" or
-                            child.Name == "AscendBtn" or
-                            child.Name:lower():find("ascend")
-                        ) then return child end
-                        local found = findBtn(child, depth+1)
-                        if found then return found end
-                    end
-                    return nil
-                end
-                ascBtn = findBtn(traitFrame, 0)
-            end
-            if not ascBtn then return end
-
-            local c = getconnections(ascBtn.MouseButton1Click)
-            for _, v in pairs(c) do pcall(v.Function) end
+            local ascBtn=localplr.PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits[cur].Main.Ascend
+            local c=getconnections(ascBtn.MouseButton1Click)
+            for _,v in pairs(c) do pcall(v.Function) end
         end)
-
         if traitTimer>=limitSec then traitTimer=0 traitIdx=traitIdx%#enabled+1 end
     end
 end)
@@ -1698,9 +1662,11 @@ task.spawn(function()
                         local saved=rp2.CFrame
                         rp2.Anchored=false
                         if pmov=="Teleport" then
+                            -- Jump onto sword position
                             rp2.CFrame=CFrame.new(sp+Vector3.new(0,4,0))
                             if hum2 then hum2.Jump=true end
                         else
+                            -- Walk to sword
                             if hum2 then
                                 hum2:MoveTo(sp)
                                 local t0=tick()
@@ -1708,7 +1674,8 @@ task.spawn(function()
                                 if hum2 then hum2.Jump=true end
                             end
                         end
-                        task.wait(1)
+                        task.wait(1) -- sit on sword for 1 full second
+                        -- Re-fetch character in case of respawn during wait
                         local c3=localplr.Character
                         local rp3=c3 and c3:FindFirstChild("HumanoidRootPart")
                         if rp3 then
@@ -1724,11 +1691,13 @@ task.spawn(function()
     end
 end)
 
--- Auto Add
+-- Auto Add (fires the game's own social remote used when you click Add Friend in the playerlist)
 task.spawn(function()
     local sent={}
+    -- Find the friend request remote the game uses (fires silently, no popup)
     local friendRemote=nil
     task.spawn(function()
+        -- Common remote names in Roblox games for friend requests
         local remoteNames={"FriendRequest","RequestFriend","AddFriend","SendFriendRequest","Friend"}
         for _,rs in ipairs({game:GetService("ReplicatedStorage"), game:GetService("ReplicatedFirst")}) do
             for _,name in ipairs(remoteNames) do
@@ -1756,6 +1725,7 @@ task.spawn(function()
                 end
             end)
             if lvl<S.autoAddMinLevel then continue end
+            -- Try game remote first (silent)
             local ok=false
             if friendRemote then
                 if friendRemote:IsA("RemoteEvent") then
@@ -1765,6 +1735,7 @@ task.spawn(function()
                     pcall(function() friendRemote:InvokeServer(plr) ok=true end)
                 end
             end
+            -- Fallback: Players service
             if not ok then
                 pcall(function() Players:RequestFriendship(plr) ok=true end)
             end
@@ -1784,7 +1755,7 @@ task.spawn(function()
     end
 end)
 
--- Attack loop
+-- Attack loop (anchor from live NPC pivot)
 task.spawn(function()
     while true do task.wait(S.phoneOptimize and 0.12 or 0.08)
         if not isAttacking or not farmEnabled or safeModeActive then continue end
@@ -1801,14 +1772,19 @@ task.spawn(function()
 end)
 
 -- Priority mode state
-local priorityHomeArea = S.selectedArea
-local currentPrioArea  = nil
-local lastTraveledArea = nil
+-- homeArea: the area name we started priority farming from (return here when done)
+-- currentPrioArea: the area we last teleported to for a priority NPC
+local priorityHomeArea = S.selectedArea  -- set when priority farming begins
+local currentPrioArea  = nil             -- area we are currently at for priority
+local lastTraveledArea = nil             -- tracks last area we told travelToArea
 
+-- Given an NPC area index (1-8), return the area name string
 local function areaIndexToName(idx)
     return AREA_NAMES[math.clamp(idx,1,#AREA_NAMES)]
 end
 
+-- Find the best priority NPC across all areas (ignores distance — scans everything)
+-- Returns: obj, pivot, areaName
 local function findPriorityTarget()
     local npcs=workspace:FindFirstChild("NPCs") if not npcs then return nil,nil,nil end
     local minR=S.priorityMinRaw or 0
@@ -1823,6 +1799,7 @@ local function findPriorityTarget()
         if rank<minR or rank>capR then continue end
         local areaIdx=tonumber(obj:GetAttribute("Area")) or 1
         local areaName=areaIndexToName(areaIdx)
+        -- Skip areas the player hasn't unlocked
         if not isAreaUnlocked(areaName) then continue end
         if rank>bestRank then
             local ok,piv=pcall(function() return obj:GetPivot() end) if not ok then continue end
@@ -1832,6 +1809,7 @@ local function findPriorityTarget()
     return best,bestPivot,bestArea
 end
 
+-- Find best NPC globally (for keepFarming fallback), any rarity
 local function findAnyTarget()
     local npcs=workspace:FindFirstChild("NPCs") if not npcs then return nil,nil,nil end
     local best=nil local bestRank=-1 local bestPivot=nil local bestArea=nil
@@ -1843,6 +1821,7 @@ local function findAnyTarget()
         local rank=tonumber(obj:GetAttribute("Rarity")) or 0
         local areaIdx=tonumber(obj:GetAttribute("Area")) or 1
         local areaName=areaIndexToName(areaIdx)
+        -- Skip locked areas
         if not isAreaUnlocked(areaName) then continue end
         if rank>bestRank then
             local ok,piv=pcall(function() return obj:GetPivot() end) if not ok then continue end
@@ -1852,6 +1831,7 @@ local function findAnyTarget()
     return best,bestPivot,bestArea
 end
 
+-- Map mode: find nearest NPC in current area
 local function findMapTarget(rp)
     local npcs=workspace:FindFirstChild("NPCs") if not npcs then return nil,nil end
     local myPos=rp.Position
@@ -1868,6 +1848,7 @@ local function findMapTarget(rp)
     return best,bestPiv
 end
 
+-- Main farming loop
 local lastTarget=nil local waypoints={} local waypointIdx=1 local lastWpIdx=0
 local stuckTimer=0 local lastFarmPos=nil local lastMoveTgt=nil
 local isUnstucking=false local stuckResetTimer=0
@@ -1879,6 +1860,7 @@ local function computePath(rp,tp)
     return nil
 end
 
+-- Travel to area only if different from last one, with debounce
 local travelCooldown=0
 local function smartTravel(areaName)
     if not areaName then return end
@@ -1892,6 +1874,7 @@ localplr.CharacterAdded:Connect(function()
     currentNPCPivot=nil lastTarget=nil lastTraveledArea=nil
     if not farmEnabled then return end
     task.wait(3) equipSword() task.wait(1)
+    -- Return to correct area on respawn
     if S.farmMode=="Priority" then
         smartTravel(priorityHomeArea)
     else
@@ -1914,11 +1897,14 @@ task.spawn(function()
         local target=nil local livePivot=nil local targetArea=nil
 
         if S.farmMode=="Map" then
+            -- Map mode: just find nearest NPC, selectedArea handled by travel loop
             target,livePivot=findMapTarget(rp)
         else
+            -- Priority mode: scan all areas for best priority NPC
             target,livePivot,targetArea=findPriorityTarget()
 
             if target then
+                -- If this NPC is in a different area than we're currently in, travel there
                 if targetArea and targetArea~=currentPrioArea then
                     currentPrioArea=targetArea
                     isAttacking=false currentNPCPivot=nil lastTarget=nil
@@ -1926,9 +1912,11 @@ task.spawn(function()
                     continue
                 end
             else
+                -- No priority NPCs found anywhere
                 if S.priorityServerHop then
                     setStatus("No priority NPCs - hopping...") task.wait(3) hopServer() continue
                 elseif S.priorityKeepFarm then
+                    -- Farm best available anywhere
                     target,livePivot,targetArea=findAnyTarget()
                     if target and targetArea and targetArea~=currentPrioArea then
                         currentPrioArea=targetArea
@@ -1937,6 +1925,7 @@ task.spawn(function()
                         continue
                     end
                 else
+                    -- Nothing to do — return to home area and wait
                     if isAtBase() or currentPrioArea~=priorityHomeArea then
                         currentPrioArea=priorityHomeArea
                         smartTravel(priorityHomeArea)
@@ -1952,6 +1941,7 @@ task.spawn(function()
             isAttacking=false currentNPCPivot=nil setStatus("Searching...") continue
         end
 
+        -- Refresh live pivot
         pcall(function() livePivot=target:GetPivot() end)
         if not livePivot then continue end
         currentNPCPivot=livePivot
@@ -2021,22 +2011,32 @@ task.spawn(function()
     end
 end)
 
--- Travel loop (Map mode only)
+-- Travel loop — only used for Map mode (Priority handles its own travel above)
 task.spawn(function()
     while true do task.wait(3)
         if not farmEnabled or taskRunning or safeModeActive then continue end
-        if S.farmMode=="Priority" then continue end
+        if S.farmMode=="Priority" then
+            -- Priority mode sets priorityHomeArea when farm is enabled
+            -- Reset home area if mode just switched
+            if priorityHomeArea~=S.selectedArea then
+                -- intentional: priorityHomeArea was set when priority mode started
+            end
+            continue
+        end
+        -- Map mode: if at base (no NPCs nearby) travel to selected area
         if isAtBase() then smartTravel(S.selectedArea) end
     end
 end)
 
+-- When farmMode switches to Priority, record the home area
+-- We do this by watching the mode buttons (already handled) but also on script load
 task.defer(function()
     if S.farmMode=="Priority" then
         priorityHomeArea=S.selectedArea
     end
 end)
 
--- Stats
+-- Stats (formatted with K/M/B/T/Q)
 task.spawn(function()
     stats.moneyStart=getCash()
     while true do task.wait(S.phoneOptimize and 10 or 5)
