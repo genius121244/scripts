@@ -981,6 +981,15 @@ dualBtn(fp,"Go Home","Platform",S.safeModeType=="home",
     function() S.safeModeType="home" saveSettings() end,
     function() S.safeModeType="platform" saveSettings() end)
 
+-- Priority mode state — defined here so checkbox callbacks can reference them
+local priorityHomeArea = S.selectedArea
+local currentPrioArea  = nil
+local lastTraveledArea = nil
+local travelCooldown   = 0
+
+-- Forward declare updateModeUI — defined after map/prioSection are created below
+local updateModeUI
+
 -- Farm mode selector — checkbox style, mutually exclusive
 sec(fp,"Farm Mode")
 
@@ -1092,7 +1101,7 @@ dropdown(prioSection,"Cap Tier",TIER_NAMES,S.priorityCapTier,function(v)
     S.priorityCapTier=v S.priorityCapRaw=tierMaxRaw(v) saveSettings()
 end)
 
-local function updateModeUI()
+updateModeUI = function()
     local isMap = S.farmMode=="Map"
     mapSection.Visible = isMap
     prioSection.Visible = not isMap
@@ -1526,7 +1535,7 @@ task.spawn(function()
 end)
 
 
--- Auto Upgrade
+-- Auto Upgrade — scans all known upgrade button locations broadly
 task.spawn(function()
     while true do task.wait(S.phoneOptimize and 2 or 1)
         local anyE=false
@@ -1537,7 +1546,7 @@ task.spawn(function()
         local cheapCost=math.huge local cheapBtn=nil
 
         local function tryUpgrade(btn)
-            if not btn then return end
+            if not btn or not btn:IsA("TextButton") then return end
             local cl=btn:FindFirstChild("Cost")
             if not cl then return end
             local txt=cl.Text:gsub("<[^>]+>","")
@@ -1546,23 +1555,34 @@ task.spawn(function()
             if cost>0 and cost<=cash and cost<cheapCost then cheapCost=cost cheapBtn=btn end
         end
 
+        -- Deep scan any frame for TextButtons named Upgrade with a Cost child
+        local function deepScan(root, depth)
+            if depth>6 then return end
+            for _,c in ipairs(root:GetChildren()) do
+                if c:IsA("TextButton") and (c.Name=="Upgrade" or c.Name=="upgrade") then
+                    tryUpgrade(c)
+                end
+                deepScan(c, depth+1)
+            end
+        end
+
         for _,m in ipairs(MACHINES) do
             if not S.upgradeEnabled[m] then continue end
+            -- Known path 1: Main.Upgrades.Main.[m].Upgrade
             pcall(function() tryUpgrade(pGui.Main.Upgrades.Main[m].Upgrade) end)
+            -- Known path 2: PlotUI.DecorFront.[m].Upgrade.Upgrade
             pcall(function() tryUpgrade(pGui.PlotUI.DecorFront[m].Upgrade.Upgrade) end)
-        end
-        for _,m in ipairs(BB_MACHINES) do
-            if not S.upgradeEnabled[m] then continue end
-            pcall(function() tryUpgrade(pGui.Backboard[m].Main.Upgrades.Prestige.Upgrade) end)
+            -- Broad scan: Backboard.[m]
+            pcall(function() deepScan(pGui.Backboard[m], 0) end)
+            -- Broad scan: PlotUI for this machine name
             pcall(function()
-                local function scan(obj,d)
-                    if d>4 then return end
-                    for _,c in ipairs(obj:GetChildren()) do
-                        if c.Name=="Upgrade" then tryUpgrade(c) end
-                        scan(c,d+1)
-                    end
-                end
-                scan(pGui.Backboard[m].Main,0)
+                local machineFrame=pGui.PlotUI:FindFirstChild(m,true)
+                if machineFrame then deepScan(machineFrame, 0) end
+            end)
+            -- Broad scan: Main.Upgrades for this machine
+            pcall(function()
+                local machineFrame=pGui.Main.Upgrades:FindFirstChild(m,true)
+                if machineFrame then deepScan(machineFrame, 0) end
             end)
         end
 
@@ -1576,27 +1596,40 @@ end)
 
 -- Auto Ascender
 -- CONFIRMED path: PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits.[Trait].Main.Ascend
+-- Fires ONCE when switching to a trait, then waits the full timer before switching.
+-- This preserves pity — repeated clicks reset the pity counter.
 task.spawn(function()
-    local traitIdx=1 local traitTimer=0 local lastTrait=nil
-    while true do task.wait(1)
-        if not S.ascenderEnabled then traitTimer=0 continue end
+    local traitIdx=1 local lastTrait=nil
+    while true do
+        if not S.ascenderEnabled then task.wait(1) continue end
         local enabled={}
         for _,t in ipairs(ASCEND_TRAITS) do
             if S.ascenderTraits[t].enabled then table.insert(enabled,t) end
         end
-        if #enabled==0 then continue end
+        if #enabled==0 then task.wait(1) continue end
         if traitIdx>#enabled then traitIdx=1 end
         local cur=enabled[traitIdx]
         local limitSec=S.ascenderTraits[cur].minutes*60
-        if lastTrait~=cur then traitTimer=0 lastTrait=cur end
-        traitTimer+=1
-        setStatus("Ascending: "..cur.." ("..traitTimer.."/"..limitSec.."s)")
-        pcall(function()
-            local ascBtn=localplr.PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits[cur].Main.Ascend
-            local c=getconnections(ascBtn.MouseButton1Click)
-            for _,v in pairs(c) do pcall(v.Function) end
-        end)
-        if traitTimer>=limitSec then traitTimer=0 traitIdx=traitIdx%#enabled+1 end
+        -- Fire the ascend button ONCE when we switch to this trait
+        if lastTrait~=cur then
+            lastTrait=cur
+            setStatus("Ascending: "..cur.." (0/"..limitSec.."s)")
+            pcall(function()
+                local ascBtn=localplr.PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits[cur].Main.Ascend
+                local c=getconnections(ascBtn.MouseButton1Click)
+                for _,v in pairs(c) do pcall(v.Function) end
+            end)
+        end
+        -- Wait the full timer showing progress, checking ascenderEnabled each second
+        local elapsed=0
+        while elapsed<limitSec do
+            task.wait(1)
+            if not S.ascenderEnabled then break end
+            elapsed+=1
+            setStatus("Ascending: "..cur.." ("..elapsed.."/"..limitSec.."s)")
+        end
+        -- Move to next trait
+        traitIdx=traitIdx%#enabled+1
     end
 end)
 
@@ -1771,14 +1804,7 @@ task.spawn(function()
     end
 end)
 
--- Priority mode state
--- homeArea: the area name we started priority farming from (return here when done)
--- currentPrioArea: the area we last teleported to for a priority NPC
-local priorityHomeArea = S.selectedArea  -- set when priority farming begins
-local currentPrioArea  = nil             -- area we are currently at for priority
-local lastTraveledArea = nil             -- tracks last area we told travelToArea
-
--- Given an NPC area index (1-8), return the area name string
+-- Priority mode target functions
 local function areaIndexToName(idx)
     return AREA_NAMES[math.clamp(idx,1,#AREA_NAMES)]
 end
@@ -1860,8 +1886,6 @@ local function computePath(rp,tp)
     return nil
 end
 
--- Travel to area only if different from last one, with debounce
-local travelCooldown=0
 local function smartTravel(areaName)
     if not areaName then return end
     if areaName==lastTraveledArea and tick()-travelCooldown<15 then return end
