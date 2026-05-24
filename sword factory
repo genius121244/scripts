@@ -16,25 +16,135 @@ local MOBILE_KEY = "SFS_V17_STORE"
 -- ============================================================
 -- CONSTANTS
 -- ============================================================
+-- AUTO-DETECTED CONSTANTS (refreshed at runtime)
+-- ============================================================
 local TARGET_NAMES        = {"Archer","Martial","Melee"}
 local MAX_TARGET_DISTANCE = 2000
 
--- NPC Rarity is a raw number attribute (confirmed: Archer=64, beginner Melee=6).
--- Area attribute maps to area index (1=Beginner's Trials ... 8=Ancient Mineshaft)
+-- AREA_NAMES: auto-detected from TeleportUI, sorted by index
+-- Fallback list covers known areas in order
 local AREA_NAMES = {
-    "Beginner's Trials",  -- 1
-    "Mystical Forest",    -- 2
-    "Stranded Island",    -- 3
-    "Snowy Fields",       -- 4
-    "Crystal Caverns",    -- 5
-    "Volcanic Isles",     -- 6
-    "Intraplanetarium",   -- 7
-    "Ancient Mineshaft",  -- 8
-    "Heavenly Gates",     -- 9
+    "Beginner's Trials","Mystical Forest","Stranded Island","Snowy Fields",
+    "Crystal Caverns","Volcanic Isles","Intraplanetarium","Ancient Mineshaft",
+    "Heavenly Gates","Galactic HQ",
 }
 
+-- Auto-detect areas from TeleportUI (sorted by area index from NPC attributes)
+local function refreshAreaNames()
+    local detected = {}
+    pcall(function()
+        local list = game:GetService("Players").LocalPlayer.PlayerGui.PlotUI.TeleportUI.Areas.List
+        for _,c in ipairs(list:GetChildren()) do
+            if c:IsA("Frame") and c.Name ~= "AreaExample" then
+                table.insert(detected, c.Name)
+            end
+        end
+    end)
+    if #detected > 0 then
+        AREA_NAMES = detected
+    end
+end
+
+-- NPC target names: auto-detect from workspace.NPCs
+local function refreshTargetNames()
+    local found = {}
+    local seen = {}
+    pcall(function()
+        local npcs = workspace:FindFirstChild("NPCs")
+        if not npcs then return end
+        for _,obj in ipairs(npcs:GetChildren()) do
+            if not seen[obj.Name] and obj:FindFirstChildWhichIsA("Humanoid") then
+                seen[obj.Name] = true
+                table.insert(found, obj.Name)
+            end
+        end
+    end)
+    if #found > 0 then TARGET_NAMES = found end
+end
+
+-- MACHINES: auto-detect from upgrade panels
+local function refreshMachines()
+    local found = {} local seen = {}
+    pcall(function()
+        local panel = game:GetService("Players").LocalPlayer.PlayerGui.Main.Upgrades.Main
+        for _,c in ipairs(panel:GetChildren()) do
+            if c:IsA("Frame") and not seen[c.Name] then
+                seen[c.Name] = true
+                table.insert(found, c.Name)
+            end
+        end
+    end)
+    if #found > 0 then
+        -- Keep Ascender at end if present
+        local machines = {}
+        local hasAscender = false
+        for _,m in ipairs(found) do
+            if m == "Ascender" then hasAscender = true
+            else table.insert(machines, m) end
+        end
+        if hasAscender then table.insert(machines, "Ascender") end
+        MACHINES = machines
+    end
+end
+
+-- ENCHANTS: auto-detect from any sword's enchant labels in workspace
+local function refreshEnchants()
+    local found = {"None"} local seen = {["None"]=true}
+    pcall(function()
+        local sf = workspace:FindFirstChild("Swords") if not sf then return end
+        for _,sword in ipairs(sf:GetChildren()) do
+            local main = sword:FindFirstChild("Main") if not main then continue end
+            local gui = main:FindFirstChild("Gui") or main:FindFirstChildOfClass("SurfaceGui")
+            if not gui then continue end
+            local itemInfo = gui:FindFirstChild("ItemInfo") if not itemInfo then continue end
+            local enchFrame = itemInfo:FindFirstChild("Enchants") if not enchFrame then continue end
+            for i=1,10 do
+                local lbl = enchFrame:FindFirstChild("Enchant"..i)
+                if lbl and lbl.Text ~= "" then
+                    local name = lbl.Text:match("^(.-)%s+[IVXLCDM]+$")
+                    if name and not seen[name] then
+                        seen[name] = true
+                        table.insert(found, name)
+                    end
+                end
+            end
+        end
+    end)
+    if #found > 1 then ENCHANTS = found end
+end
+
+-- ASCEND_TRAITS: auto-detect from AscenderUI
+local function refreshAscendTraits()
+    local found = {}
+    pcall(function()
+        local traits = game:GetService("Players").LocalPlayer.PlayerGui.PlotUI.AscenderUI.Main.Selection.Traits
+        for _,c in ipairs(traits:GetChildren()) do
+            if c:IsA("Frame") then table.insert(found, c.Name) end
+        end
+    end)
+    if #found > 0 then ASCEND_TRAITS = found end
+end
+
+-- Run initial detection after a short wait for GUI to load
+task.spawn(function()
+    task.wait(3)
+    refreshAreaNames()
+    refreshTargetNames()
+    refreshMachines()
+    refreshEnchants()
+    refreshAscendTraits()
+    -- Refresh every 5 minutes to pick up game updates
+    while true do
+        task.wait(300)
+        refreshAreaNames()
+        refreshTargetNames()
+        refreshMachines()
+        refreshEnchants()
+        refreshAscendTraits()
+    end
+end)
+
 -- Boss/Priority use NPC rarity raw numbers bucketed into display tiers
--- Each tier covers a band of raw rarity values
 local RARITY_TIERS = {
     {name="Any",       min=0,   max=9999},
     {name="Common",    min=5,   max=9},
@@ -73,7 +183,7 @@ local function tierMaxRaw(name)
     for _,t in ipairs(RARITY_TIERS) do if t.name==name then return t.max end end return 9999
 end
 
--- Full sword rarity strings (for loot/enchant) — these include - + ++ variants
+-- Sword rarities — auto-detected from swords in workspace
 local RARITIES = {
     "Basic","Basic+","Basic++","Common-","Common","Common+","Common++",
     "Uncommon-","Uncommon","Uncommon+","Uncommon++","Rare-","Rare","Rare+","Rare++",
@@ -1046,40 +1156,58 @@ mapSelLbl.Size=UDim2.new(1,0,0,14) mapSelLbl.BackgroundTransparency=1
 mapSelLbl.Text="Active: "..S.selectedArea
 mapSelLbl.TextColor3=Color3.fromRGB(100,100,180) mapSelLbl.TextSize=10
 mapSelLbl.Font=Enum.Font.Gotham mapSelLbl.TextXAlignment=Enum.TextXAlignment.Left
--- Area buttons
+-- Area buttons — rebuilt dynamically
 local areaBtns={}
-for _,area in ipairs(AREA_NAMES) do
-    local ab=Instance.new("TextButton",mapSection)
-    ab.Size=UDim2.new(1,0,0,26)
-    ab.BackgroundColor3=area==S.selectedArea and Color3.fromRGB(65,65,155) or Color3.fromRGB(22,22,38)
-    ab.BorderSizePixel=0 ab.Text=area ab.TextColor3=Color3.fromRGB(230,230,255)
-    ab.TextSize=11 ab.Font=Enum.Font.Gotham
-    Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
-    areaBtns[area]=ab
-    ab.MouseButton1Click:Connect(function()
-        -- Don't allow selecting a locked area
-        if not isAreaUnlocked(area) then
-            setStatus("Area locked: "..area)
-            return
-        end
-        S.selectedArea=area mapSelLbl.Text="Active: "..area saveSettings()
-        for a,b in pairs(areaBtns) do
-            b.BackgroundColor3=a==area and Color3.fromRGB(65,65,155) or Color3.fromRGB(22,22,38)
-        end
-        if farmEnabled then travelToArea(area) end
-    end)
-end
-
--- Update area buttons to show lock state after GUI loads
-task.defer(function()
-    task.wait(2) -- wait for GUI to be fully loaded
+local function rebuildAreaBtns()
+    -- Clear existing buttons
+    for _,btn in pairs(areaBtns) do pcall(function() btn:Destroy() end) end
+    areaBtns={}
+    -- Rebuild from current AREA_NAMES
     for _,area in ipairs(AREA_NAMES) do
-        local btn=areaBtns[area]
-        if btn then
-            if not isAreaUnlocked(area) then
-                btn.Text="🔒 "..area
-                btn.TextColor3=Color3.fromRGB(120,100,100)
-                btn.BackgroundColor3=Color3.fromRGB(18,14,14)
+        local ab=Instance.new("TextButton",mapSection)
+        ab.Size=UDim2.new(1,0,0,26)
+        ab.BackgroundColor3=area==S.selectedArea and Color3.fromRGB(65,65,155) or Color3.fromRGB(22,22,38)
+        ab.BorderSizePixel=0 ab.Text=area ab.TextColor3=Color3.fromRGB(230,230,255)
+        ab.TextSize=11 ab.Font=Enum.Font.Gotham
+        Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
+        areaBtns[area]=ab
+        ab.MouseButton1Click:Connect(function()
+            if not isAreaUnlocked(area) then setStatus("Area locked: "..area) return end
+            S.selectedArea=area mapSelLbl.Text="Active: "..area saveSettings()
+            for a,b in pairs(areaBtns) do
+                b.BackgroundColor3=a==area and Color3.fromRGB(65,65,155) or Color3.fromRGB(22,22,38)
+            end
+            if farmEnabled then travelToArea(area) end
+        end)
+    end
+end
+rebuildAreaBtns()
+
+-- Update lock state and auto-refresh area buttons every 30s
+task.spawn(function()
+    while true do
+        task.wait(30)
+        -- Check if AREA_NAMES changed (new area added)
+        local needsRebuild=false
+        for _,area in ipairs(AREA_NAMES) do
+            if not areaBtns[area] then needsRebuild=true break end
+        end
+        if needsRebuild then rebuildAreaBtns() end
+        -- Update lock visuals
+        for _,area in ipairs(AREA_NAMES) do
+            local btn=areaBtns[area]
+            if btn then
+                if not isAreaUnlocked(area) then
+                    btn.Text="🔒 "..area
+                    btn.TextColor3=Color3.fromRGB(120,100,100)
+                    btn.BackgroundColor3=Color3.fromRGB(18,14,14)
+                else
+                    btn.Text=area
+                    btn.TextColor3=Color3.fromRGB(230,230,255)
+                    if area~=S.selectedArea then
+                        btn.BackgroundColor3=Color3.fromRGB(22,22,38)
+                    end
+                end
             end
         end
     end
