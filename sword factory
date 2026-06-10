@@ -87,9 +87,14 @@ local function refreshMachines()
     end
 end
 
--- ENCHANTS: auto-detect from any sword's enchant labels in workspace
+-- ENCHANTS: auto-detect from swords AND enchant boards in workspace
 local function refreshEnchants()
     local found = {"None"} local seen = {["None"]=true}
+    local function addEnchant(name)
+        name = name:gsub("^%s+",""):gsub("%s+$","")
+        if name ~= "" and not seen[name] then seen[name]=true table.insert(found,name) end
+    end
+    -- Source 1: swords in workspace.Swords
     pcall(function()
         local sf = workspace:FindFirstChild("Swords") if not sf then return end
         for _,sword in ipairs(sf:GetChildren()) do
@@ -102,16 +107,34 @@ local function refreshEnchants()
                 local lbl = enchFrame:FindFirstChild("Enchant"..i)
                 if lbl and lbl.Text ~= "" then
                     local name = lbl.Text:match("^(.-)%s+[IVXLCDM]+$")
-                    if name and not seen[name] then
-                        seen[name] = true
-                        table.insert(found, name)
-                    end
+                    if name then addEnchant(name) end
                 end
             end
         end
     end)
+    -- Source 2: scan PlayerGui Backboard for enchant names listed in the enchanter UI
+    pcall(function()
+        local pGui = game:GetService("Players").LocalPlayer.PlayerGui
+        local function scanLabels(obj, depth)
+            if depth > 7 then return end
+            for _, c in ipairs(obj:GetChildren()) do
+                if c:IsA("TextLabel") then
+                    -- Enchant names are single capitalised words on the board
+                    local name = c.Text:gsub("<[^>]+>",""):match("^([A-Z][a-z]+)$")
+                    if name and #name > 2 then addEnchant(name) end
+                end
+                scanLabels(c, depth+1)
+            end
+        end
+        local bb = pGui:FindFirstChild("Backboard")
+        if bb then
+            local enc = bb:FindFirstChild("Enchanter")
+            if enc then scanLabels(enc, 0) end
+        end
+    end)
     if #found > 1 then ENCHANTS = found end
 end
+
 
 -- ASCEND_TRAITS: auto-detect from AscenderUI
 local function refreshAscendTraits()
@@ -208,7 +231,8 @@ for i,r in ipairs(RARITIES) do RARITY_RANK[r]=i end
 
 local ENCHANTS = {
     "None","Fortune","Sharpness","Protection","Haste","Swiftness","Critical","Resistance",
-    "Healing","Looting","Attraction","Stealth","Ancient","Desperation","Insight","Thorns","Knockback"
+    "Healing","Looting","Attraction","Stealth","Ancient","Desperation","Insight","Thorns",
+    "Knockback","Slayer","Opulence"
 }
 local ROMAN = {
     "I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII","XIII","XIV","XV",
