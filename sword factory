@@ -13,11 +13,11 @@ local PLACE_ID = game.PlaceId
 local SAVE_FILE = "sfs_v17.txt"
 local MOBILE_KEY = "SFS_V17_STORE"
 
--- ============================================================
+
 -- CONSTANTS
--- ============================================================
+
 -- AUTO-DETECTED CONSTANTS (refreshed at runtime)
--- ============================================================
+
 local TARGET_NAMES        = {"Archer","Martial","Melee"}
 local MAX_TARGET_DISTANCE = 2000
 
@@ -245,9 +245,9 @@ local BB_MACHINES = {"Appraiser","Polisher","Upgrader","Molder","Classifier","En
 local ASCEND_TRAITS = {"Rarity","Quality","Mold","Level","Class","Enchant"}
 local ANCHOR_OPTIONS = {"Behind","Above","Below"}
 
--- ============================================================
+
 -- SETTINGS
--- ============================================================
+
 local function makePreset(name)
     return {name=name,enabled=false,movement="Teleport",slots={
         {enchant="None",minLevel=1,enabled=false},
@@ -324,9 +324,9 @@ local function deepCopy(src,dst)
 end
 deepCopy(DEFAULT_S,S)
 
--- ============================================================
+
 -- SAVE / LOAD
--- ============================================================
+
 local function saveSettings()
     local ok,enc=pcall(HttpService.JSONEncode,HttpService,S)
     if not ok then return end
@@ -393,9 +393,9 @@ S.priorityCapRaw = tierMaxRaw(S.priorityCapTier)
 
 local farmEnabled=S.farmEnabled
 
--- ============================================================
+
 -- UTILITIES
--- ============================================================
+
 local function fmtMoney(n)
     if n>=1e15 then return string.format("%.2fQ",n/1e15)
     elseif n>=1e12 then return string.format("%.2fT",n/1e12)
@@ -707,9 +707,9 @@ local function isSwordEquipped()
 end
 
 
--- ============================================================
+
 -- TASK QUEUE
--- ============================================================
+
 local taskRunning=false local taskQueue={}
 local function addTask(name,fn) table.insert(taskQueue,{name=name,fn=fn}) end
 local function runNextTask()
@@ -719,17 +719,17 @@ local function runNextTask()
     task.spawn(function() t.fn() taskRunning=false runNextTask() end)
 end
 
--- ============================================================
+
 -- RUNTIME STATE
--- ============================================================
+
 local isAttacking     = false
 local safeModeActive  = false
 local currentNPCPivot = nil
 local stats={kills=0,swordsCollected=0,sessionStart=tick(),moneyStart=0,moneyNow=0}
 
--- ============================================================
+
 -- GUI
--- ============================================================
+
 pcall(function()
     local old=localplr.PlayerGui:FindFirstChild("SFSv17") if old then old:Destroy() end
 end)
@@ -884,9 +884,9 @@ for _,tabName in ipairs(TABS) do
     btn.MouseButton1Click:Connect(function() switchTab(tabName) end)
 end
 
--- ============================================================
+
 -- COMPONENT HELPERS
--- ============================================================
+
 local function sec(parent,title)
     local f=Instance.new("Frame",parent) f.Size=UDim2.new(1,0,0,16) f.BackgroundTransparency=1
     local line=Instance.new("Frame",f) line.Size=UDim2.new(1,0,0,1) line.Position=UDim2.new(0,0,0.5,0)
@@ -1085,9 +1085,9 @@ local function dropdown(parent,label,opts,default,onChange)
     return f, function() return selected end, function(v) selected=v dbtn.Text=v.." ▾" end
 end
 
--- ============================================================
+
 -- FARM TAB
--- ============================================================
+
 local fp=tabPages["Farm"]
 sec(fp,"Auto Farm")
 tog(fp,"Farm Enabled",S.farmEnabled,function(v)
@@ -1265,9 +1265,9 @@ updateModeUI = function()
 end
 task.defer(updateModeUI)
 
--- ============================================================
+
 -- UPGRADE TAB
--- ============================================================
+
 local up=tabPages["Upgrade"]
 sec(up,"Machines")
 for _,m in ipairs(MACHINES) do
@@ -1315,9 +1315,9 @@ for _,trait in ipairs(ASCEND_TRAITS) do
     end)
 end
 
--- ============================================================
+
 -- LOOT TAB
--- ============================================================
+
 local lp=tabPages["Loot"]
 sec(lp,"Auto Loot")
 tog(lp,"Auto Loot",S.lootEnabled,function(v) S.lootEnabled=v saveSettings() end)
@@ -1328,9 +1328,9 @@ dropdown(lp,"Min Rarity",RARITIES,S.lootMinRarity,function(v) S.lootMinRarity=v 
 inp(lp,"Min Price",tostring(S.lootMinWorth),function(v) S.lootMinWorth=parsePrice(v) saveSettings() end)
 sldr(lp,"Loot Radius",500,10000,S.lootRadius,function(v) S.lootRadius=v saveSettings() end)
 
--- ============================================================
+
 -- ENCHANT TAB (5 presets)
--- ============================================================
+
 local ep=tabPages["Enchant"]
 sec(ep,"Enchant Sniper")
 for pi=1,5 do
@@ -1460,9 +1460,9 @@ for pi=1,5 do
 end
 
 
--- ============================================================
+
 -- COMBAT TAB
--- ============================================================
+
 local ctp=tabPages["Combat"]
 sec(ctp,"Anchor")
 cycleBtn(ctp,"Position",ANCHOR_OPTIONS,S.anchorPreset,function(v) S.anchorPreset=v saveSettings() end)
@@ -1485,9 +1485,9 @@ sldr(ctp,"Walk Speed",16,150,S.walkSpeed,function(v)
     end
 end)
 
--- ============================================================
+
 -- MISC TAB
--- ============================================================
+
 local misc=tabPages["Misc"]
 sec(misc,"Anti AFK")
 tog(misc,"Anti AFK",S.antiAfkEnabled,function(v) S.antiAfkEnabled=v saveSettings() end)
@@ -1510,9 +1510,9 @@ end)
 sec(misc,"Phone Optimization")
 tog(misc,"Phone Mode",S.phoneOptimize,function(v) S.phoneOptimize=v saveSettings() end)
 
--- ============================================================
+
 -- CONFIG TAB
--- ============================================================
+
 local cfgp=tabPages["Config"]
 sec(cfgp,"Menu")
 local menuTogBtn=Instance.new("TextButton",cfgp)
@@ -1613,9 +1613,9 @@ statsLbl.Text="Loading..." statsLbl.RichText=true
 Instance.new("UICorner",statsLbl).CornerRadius=UDim.new(0,6)
 local slp2=Instance.new("UIPadding",statsLbl) slp2.PaddingLeft=UDim.new(0,8) slp2.PaddingTop=UDim.new(0,4)
 
--- ============================================================
+
 -- NOCLIP (non-HRP parts only)
--- ============================================================
+
 RunService.Stepped:Connect(function()
     if not S.noclipEnabled then return end
     local char=localplr.Character if not char then return end
@@ -1642,9 +1642,9 @@ task.spawn(function()
     end
 end)
 
--- ============================================================
+
 -- ANTI AFK (jump every 15 minutes)
--- ============================================================
+
 task.spawn(function()
     while true do
         task.wait(900) -- 15 minutes
